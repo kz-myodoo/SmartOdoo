@@ -14,6 +14,7 @@ pip3 install pip --upgrade
 if [[ -f "/mnt/extra-addons/requirements.txt" ]]; then
     pip3 install -r /mnt/extra-addons/requirements.txt
 fi
+pip3 install -r /mnt/extra-addons/requirements.txt
 
 # install debugpy package for debugging
 pip3 install debugpy
