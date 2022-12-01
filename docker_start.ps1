@@ -16,6 +16,8 @@ param(
     [Alias('e', 'enterprise')] [switch] $INSTALL_ENTERPRISE_MODULES,
     
     [Alias('d', 'delete')] [switch] $DELETE_PROJECT,
+
+    [Alias('r', 'rebuild')] $CONTAINER_NAME,
     
     [Alias('t', 'test')] [switch] $RUN_TEST,
 
@@ -159,6 +161,10 @@ function project_exist {
     {
         run_unit_tests
     }
+    elseif ( $CONTAINER_NAME )
+    {
+        rebuild_container
+    }
     else
     {
         project_start
@@ -210,6 +216,16 @@ function check_project {
     }
 }
 
+function rebuild_container(){
+    if ( $null -eq $CONTAINER_NAME -or $CONTAINER_NAME -eq "")
+    {
+        Write-Output "You need to specify container name that you want to rebuild. Use -r or --rebuild"
+        display_help
+    }
+    $location = Get-Location
+    Set-Location $PROJECT_FULLPATH; docker-compose up -d --no-deps --force-recreate --build "$CONTAINER_NAME"
+    Set-Location $location
+}
 function check_odoo_version {
     if ( $ODOO_VER.Substring(2) -ne ".0" )
     {
@@ -319,6 +335,7 @@ function display_help {
     Write-Output "-b, -branch                   (N)  Set addons repository branch"
     Write-Output "-e, -enterprise                    Set for install enterprise modules"
     Write-Output "-d, -delete                        Delete project if exist"
+    Write-Output "-r, -rebuild                  (N)  Rebuild container in project with given name"
     Write-Output "-t, -test                          Run tests."
     Write-Output "-m, -module                   (N)  Module to test"
     Write-Output "    -tags                     (N)  Tags to test"
