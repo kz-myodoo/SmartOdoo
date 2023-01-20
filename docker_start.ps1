@@ -18,12 +18,14 @@ param(
     [Alias('d', 'delete')] [switch] $DELETE_PROJECT,
 
     [Alias('r', 'rebuild')] $CONTAINER_NAME,
+
+    [Alias('install')] [switch] $INSTALL_MODULE,
     
     [Alias('t', 'test')] [switch] $RUN_TEST,
 
-    [Alias('m', 'module')] $TEST_MODULE,
+    [Alias('m', 'module')] $ODOO_MODULE,
 
-    [Alias('database')] $TEST_DB,
+    [Alias('db')] $DATABASE,
 
     [Alias('tags')] $TEST_TAGS,
 
@@ -127,26 +129,42 @@ function project_start {
 
 function run_unit_tests {
     $location = Get-Location
-    if ( $null -eq $TEST_DB -or $TEST_DB -eq "" )
+    if ( $null -eq $DATABASE -or $DATABASE -eq "" )
     {
         Write-Output "You need to specify database to run tests on. Use --db."
         display_help
     }
-    if ( $null -ne $TEST_MODULE )
+    if ( $null -ne $ODOO_MODULE )
     {
-        Write-Output "START ODOO UNIT TESTS ON ($TEST_DB) DB FOR ($TEST_MODULE) MODULE"
-        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d $TEST_DB -i $TEST_MODULE
+        Write-Output "START ODOO UNIT TESTS ON ($DATABASE) DB FOR ($ODOO_MODULE) MODULE"
+        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d $DATABASE -i $ODOO_MODULE
         Set-Location $location
     }
     elseif ( $null -ne $TEST_TAGS )
     {
-        Write-Output "START ODOO UNIT TESTS ON ($TEST_DB) DB FOR ($TEST_TAGS) TAGS"
-        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d $TEST_DB --test-tags=$TEST_TAGS
+        Write-Output "START ODOO UNIT TESTS ON ($DATABASE) DB FOR ($TEST_TAGS) TAGS"
+        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d $DATABASE --test-tags=$TEST_TAGS
         Set-Location $location
     }
     else
     {
         Write-Output "You need to specify module or tags. Use -m or --tags"
+        display_help
+    }
+}
+
+function install {
+    $location = Get-Location
+    if ( $INSTALL_MODULE )
+    {
+        Set-Location $PROJECT_FULLPATH; docker-compose stop web
+        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d $DATABASE -i $ODOO_MODULE
+        Set-Location $PROJECT_FULLPATH; docker-compose start
+        Set-Location $location
+    }
+    else
+    {
+        Write-Output "You need to specify modue name that you want to install. Use --install"
         display_help
     }
 }
@@ -164,6 +182,10 @@ function project_exist {
     elseif ( $CONTAINER_NAME )
     {
         rebuild_container
+    }
+    elseif ( $INSTALL_MODULE )
+    {
+        install
     }
     else
     {
@@ -339,7 +361,9 @@ function display_help {
     Write-Output "-t, -test                          Run tests."
     Write-Output "-m, -module                   (N)  Module to test"
     Write-Output "    -tags                     (N)  Tags to test"
-    Write-Output "    -database                 (N)  Database to test on"
+    Write-Output "    -db                       (N)  Database to test on"
+    Write-Output "    -install                  (N)  Rebuild web container and install given module."
+    Write-Output "                                   Require -m module and -db database."
 
     # echo some stuff here for the -a or --add-options
     exit 2
