@@ -18,6 +18,10 @@ fi
 # install debugpy package for debugging
 pip3 install debugpy
 
+# install often required paskages
+pip3 install html2text
+pip3 install suds
+
 # sed -i 's|raise werkzeug.exceptions.BadRequest(msg)|self.jsonrequest = {}|g' /usr/lib/python3/dist-packages/odoo/http.py
 
 DB_ARGS=()
