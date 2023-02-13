@@ -114,7 +114,7 @@ rebuild_container(){
     (cd $PROJECT_FULLPATH; docker-compose up -d --no-deps --force-recreate --build "$CONTAINER_NAME")
 }
 
-install_and_rebuild(){
+install(){
     if [ -z INSTALL_MODULE ] || [ "$INSTALL_MODULE" == "" ]; then
         echo "You need to specify modue name that you want to install. Use --install"
         display_help
@@ -122,6 +122,14 @@ install_and_rebuild(){
     (cd $PROJECT_FULLPATH; docker-compose stop web)
     (cd $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d ${DB} -i ${MODULE})
     (cd $PROJECT_FULLPATH; docker-compose start web)
+}
+
+pip_install(){
+    if [ -z PIP_MODULE ] || [ "$PIP_MODULE" == "" ]; then
+        echo "You need to specify modue name that you want to install. Use --pip_install"
+        display_help
+    fi
+    (cd $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install ${PIP_MODULE})
 }
 
 project_exist() {
@@ -133,7 +141,9 @@ project_exist() {
     elif [ ! -z "${CONTAINER_NAME}" ]; then
         rebuild_container
     elif [ ! -z "${INSTALL_MODULE}" ]; then
-        install_and_rebuild
+        install
+    elif [ ! -z "${PIP_INSTALL}" ]; then 
+        pip_install
     else
         project_start
     fi
@@ -249,6 +259,7 @@ display_help() {
     echo "   -b, --branch                   (N)  Set addons repository branch"
     echo "   -e, --enterprise                    Set for install enterprise modules"
     echo "   -d, --delete                        Delete project if exist"
+    echo "       --pip_install              (N)  Install pip module on web container"
     echo "       --install                       Restart container and install module given by -m parameter"
     echo "                                       on database in --db parameter"
     echo "   -r, --rebuild                  (N)  Rebuild container in project with given name"
@@ -266,7 +277,7 @@ display_help() {
 # Process the input options. Add options as needed.        #
 ############################################################
 
-PARSED_ARGS=$(getopt -a -o n:o:p:a:b:m:r:edth -l name:,odoo:,psql:,addons:,branch:,module:,db:,tags:,rebuild:,install,enterprise,delete,test,help -- "$@")
+PARSED_ARGS=$(getopt -a -o n:o:p:a:b:m:r:edth -l name:,odoo:,psql:,addons:,branch:,module:,db:,tags:,rebuild:,pip_install:,install,enterprise,delete,test,help -- "$@")
 VALID_ARGS=$?
 if [ "$VALID_ARGS" != "0" ]; then
     display_help
@@ -313,6 +324,10 @@ while :; do
         ;;
     -r | --rebuild)
         CONTAINER_NAME="$2"
+        shift 2
+        ;;
+    --rebuild)
+        PIP_INSTALL="$2"
         shift 2
         ;;
     --install)

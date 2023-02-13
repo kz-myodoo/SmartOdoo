@@ -19,6 +19,8 @@ param(
 
     [Alias('r', 'rebuild')] $CONTAINER_NAME,
 
+    [Alias('pip_install')]  $PIP_MODULE,
+
     [Alias('install')] [switch] $INSTALL_MODULE,
     
     [Alias('t', 'test')] [switch] $RUN_TEST,
@@ -169,6 +171,20 @@ function install {
     }
 }
 
+function pip_install {
+    $location = Get-Location
+    if ( $PIP_MODULE )
+    {
+        Set-Location $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install $PIP_MODULE
+        Set-Location $location
+    }
+    else
+    {
+        Write-Output "You need to specify modue name that you want to install. Use --pip_install"
+        display_help
+    }
+}
+
 function project_exist {
     if ( $DELETE_PROJECT )
     {
@@ -186,6 +202,10 @@ function project_exist {
     elseif ( $INSTALL_MODULE )
     {
         install
+    }
+    elseif ( $PIP_MODULE )
+    {
+        pip_install
     }
     else
     {
@@ -357,13 +377,14 @@ function display_help {
     Write-Output "-b, -branch                   (N)  Set addons repository branch"
     Write-Output "-e, -enterprise                    Set for install enterprise modules"
     Write-Output "-d, -delete                        Delete project if exist"
+    Write-Output "    -pip_install              (N)  Install pip module on web container"
+    Write-Output "    -install                       Restart container and install module given by -m parameter"
+    Write-Output "                                   on database in --db parameter"
     Write-Output "-r, -rebuild                  (N)  Rebuild container in project with given name"
     Write-Output "-t, -test                          Run tests."
-    Write-Output "-m, -module                   (N)  Module to test"
+    Write-Output "-m, -module                   (N)  Module to test(-t) or install(--install)"
     Write-Output "    -tags                     (N)  Tags to test"
-    Write-Output "    -db                       (N)  Database to test on"
-    Write-Output "    -install                  (N)  Rebuild web container and install given module."
-    Write-Output "                                   Require -m module and -db database."
+    Write-Output "    -db                       (N)  Database to test(-t) or install(--install)"
 
     # echo some stuff here for the -a or --add-options
     exit 2
