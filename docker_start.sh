@@ -13,7 +13,7 @@
 ODOO_VER="15.0"
 PSQL_VER="13"
 PROJECTS_DIR="${HOME}/Dokumenty/DockerProjects/"
-ENTERPRISE_LOCATION="$(pwd)/enterprise/"
+ENTERPRISE_LOCATION="$(pwd)/enterprise"
 # Odoo
 ODOO_GITHUB_NAME="odoo"
 ODOO_ENTERPRISE_REPOSITORY="enterprise"
