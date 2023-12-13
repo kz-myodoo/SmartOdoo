@@ -45,6 +45,7 @@ param(
 # $ODOO_VER="15.0"
 # $PSQL_VER="13"
 $PROJECTS_DIR=(Get-Location) -replace "SmartOdoo", "DockerProjects"
+$ENTERPRISE_LOCATION="$(Get-Location)\enterprise"
 # Odoo
 $ODOO_GITHUB_NAME="odoo"
 $ODOO_ENTERPRISE_REPOSITORY="enterprise"
@@ -55,6 +56,7 @@ $ODOO_ENTERPRISE_REPOSITORY="enterprise"
 function customize_env {
     # CUSTOMIZE .ENV VARIABLES
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PROJECT_NAME=TEST_PROJECT", "PROJECT_NAME=$PROJECT_NAME" } | Set-Content .env
+    (Get-Content .\.env) | ForEach-Object { $_ -replace "ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION", "ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION\$ODOO_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_VER=15.0", "ODOO_VER=$ODOO_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_VER=13", "PSQL_VER=$PSQL_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_CONT_NAME=ODOO_TEMP_CONT", "ODOO_CONT_NAME=$PROJECT_NAME-web" } | Set-Content .env
@@ -68,6 +70,7 @@ function customize_env {
 function standarize_env {
     # RETURN TO STANDARD .ENV VARIABLES
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PROJECT_NAME=$PROJECT_NAME", "PROJECT_NAME=TEST_PROJECT" } | Set-Content .env
+    (Get-Content .\.env) | ForEach-Object { $_ -replace [regex]::Escape("ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION\$ODOO_VER"), "ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_VER=$ODOO_VER", "ODOO_VER=15.0" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_VER=$PSQL_VER", "PSQL_VER=13" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_CONT_NAME=$PROJECT_NAME-web", "ODOO_CONT_NAME=ODOO_TEMP_CONT" } | Set-Content .env
@@ -81,7 +84,7 @@ function clone_addons {
     {
         if ( $null -ne $BRANCH_NAME )
         {
-            git -C $PROJECT_FULLPATH clone $ADDONS_CLONE_URL  --branch $BRANCH_NAME addons 
+            git -C $PROJECT_FULLPATH clone $ADDONS_CLONE_URL --branch $BRANCH_NAME addons 
         }
         else
         {
@@ -93,7 +96,15 @@ function clone_enterprise {
     enterprise_link_compose
     if ($null -ne $ENTERPRISE_CLONE_URL )
     {
-        git -C $PROJECT_FULLPATH clone $ENTERPRISE_CLONE_URL  --branch $ODOO_VER enterprise 
+        if (-not(Test-Path -Path $ENTERPRISE_LOCATION\$ODOO_VER))
+        {
+            New-Item "$ENTERPRISE_LOCATION\$ODOO_VER" -ItemType "directory"
+            git -C "$ENTERPRISE_LOCATION\$ODOO_VER" clone --depth 1 $ENTERPRISE_CLONE_URL --branch $ODOO_VER . 
+        }
+        else
+        {
+            git -C "$ENTERPRISE_LOCATION\$ODOO_VER" pull
+        }
     }
 }
 
@@ -228,6 +239,9 @@ function create_project {
     }
     customize_env
     Copy-Item .\.env -Destination $PROJECT_FULLPATH\ -Recurse
+    docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull web
+    docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull db
+    docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull smtp4dev
     docker-compose -p $PROJECT_NAME -f $PROJECT_FULLPATH\docker-compose.yml up --detach
     standarize_env
 }
@@ -235,7 +249,6 @@ function create_project {
 function create_project_directiories {
     New-Item $PROJECT_FULLPATH -ItemType "directory"
     New-Item $PROJECT_FULLPATH\addons -ItemType "directory"
-    New-Item $PROJECT_FULLPATH\enterprise -ItemType "directory"
     New-Item $PROJECT_FULLPATH\config -ItemType "directory"
     New-Item $PROJECT_FULLPATH\.vscode -ItemType "directory"
 }
