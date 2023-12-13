@@ -13,6 +13,7 @@
 ODOO_VER="15.0"
 PSQL_VER="13"
 PROJECTS_DIR="${HOME}/Dokumenty/DockerProjects/"
+ENTERPRISE_LOCATION="$(pwd)/enterprise/"
 # Odoo
 ODOO_GITHUB_NAME="odoo"
 ODOO_ENTERPRISE_REPOSITORY="enterprise"
@@ -23,6 +24,7 @@ ODOO_ENTERPRISE_REPOSITORY="enterprise"
 customize_env() {
     # CUSTOMIZE .ENV VARIABLES
     sed -i "s|^PROJECT_NAME=TEST_PROJECT *|PROJECT_NAME=$PROJECT_NAME|g" .env
+    sed -i "s|^ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION *|ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION/$ODOO_VER|g" .env
     sed -i "s|^ODOO_VER=15.0 *|ODOO_VER=$ODOO_VER|g" .env
     sed -i "s|^PSQL_VER=13 *|PSQL_VER=$PSQL_VER|g" .env
     sed -i "s|^ODOO_CONT_NAME=ODOO_TEMP_CONT *|ODOO_CONT_NAME=$PROJECT_NAME-web|g" .env
@@ -38,6 +40,7 @@ customize_env() {
 standarize_env() {
     # RETURN TO STANDARD .ENV VARIABLES
     sed -i "s|^PROJECT_NAME=$PROJECT_NAME|PROJECT_NAME=TEST_PROJECT|g" .env
+    sed -i "s|^ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION/$ODOO_VER|ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION|g" .env
     sed -i "s|^ODOO_VER=$ODOO_VER*|ODOO_VER=15.0|g" .env
     sed -i "s|^PSQL_VER=$PSQL_VER*|PSQL_VER=13|g" .env
     sed -i "s|^ODOO_CONT_NAME=$PROJECT_NAME-web *|ODOO_CONT_NAME=ODOO_TEMP_CONT |g" .env
@@ -51,7 +54,7 @@ standarize_env() {
 clone_addons() {
     if  [ ! -z "${ADDONS_CLONE_URL}" ]; then
         if [ ! -z "${BRANCH_NAME}" ]; then
-            git -C "${PROJECT_FULLPATH}" clone "${ADDONS_CLONE_URL}"  --branch "${BRANCH_NAME}" addons 
+            git -C "${PROJECT_FULLPATH}" clone "${ADDONS_CLONE_URL}" --branch "${BRANCH_NAME}" addons 
         else
             git -C "${PROJECT_FULLPATH}" clone "${ADDONS_CLONE_URL}" addons 
         fi
@@ -60,7 +63,12 @@ clone_addons() {
 clone_enterprise() {
     enterprise_link_compose
     if  [ ! -z "${ENTERPRISE_CLONE_URL}" ]; then
-            git -C "${PROJECT_FULLPATH}" clone "${ENTERPRISE_CLONE_URL}"  --branch "${ODOO_VER}" enterprise 
+        if ! [ -d "$ENTERPRISE_LOCATION/$ODOO_VER" ]; then
+            mkdir -p "$ENTERPRISE_LOCATION/$ODOO_VER"
+            git -C "$ENTERPRISE_LOCATION/$ODOO_VER" clone --depth 1 "${ENTERPRISE_CLONE_URL}" --branch "${ODOO_VER}" .
+        else
+            git -C "$ENTERPRISE_LOCATION/$ODOO_VER" pull
+        fi   
     fi
 }
 
@@ -161,7 +169,9 @@ create_project() {
     fi
     customize_env
     cp -r ./.env "${PROJECT_FULLPATH}/"
-    # docker-compose -p "${PROJECT_NAME}" --project-directory "${PROJECT_FULLPATH}" up --detach
+    docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull web
+    docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull db
+    docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull smtp4dev
     docker-compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach
     standarize_env
 }
@@ -169,7 +179,6 @@ create_project() {
 create_project_directiories() {
     mkdir -p "$PROJECT_FULLPATH"
     mkdir -p "$PROJECT_FULLPATH/addons"
-    mkdir -p "$PROJECT_FULLPATH/enterprise"
     mkdir -p "$PROJECT_FULLPATH/config"
     mkdir -p "${PROJECT_FULLPATH}/.vscode"
 }
