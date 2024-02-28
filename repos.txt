@@ -1,0 +1,2 @@
+ekomysl https://github.com/os-myodoo/EKO-MYSL.git
+gratka https://github.com/os-myodoo/Grupa-Morizon-Gratka.git

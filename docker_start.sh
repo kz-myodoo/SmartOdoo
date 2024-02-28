@@ -222,14 +222,37 @@ get_enterprise_secret() {
     GITHUB_ENTERPRISE_ACCOUNT=$(get_secret github_enterprise_account)
 }
 
+# Function to get URL from repos.txt file
+get_repo_url() {
+    while IFS=' ' read -r name url
+    do
+        if [ "$name" = "$1" ]; then
+            echo $url
+            return
+        fi
+    done < "repos.txt"
+    
+    # If we get here, the repository was not found
+    echo "Repository not found. Please make sure the last line of repos.txt is empty." >&2
+}
+
 addons_link_compose() {
 
     # https://github.com/rnwood/smtp4dev.git
     ADDONS_URL=$1
-    if [[ "${ADDONS_URL}" != *"github.com"* ]]; then
-        echo "Currently only github URLs accepted"
-        display_help
-    fi
+    # predefined addons
+    case "$ADDONS_URL" in
+    *)
+        if [[ "${ADDONS_URL}" != *"github.com"* ]]; then
+            ADDONS_URL=$(get_repo_url ${ADDONS_URL})
+            if [[ -z "$ADDONS_URL" ]]; then
+                echo "Currently only github URLs or predefined repository names accepted"
+                display_help
+                return
+            fi
+        fi
+        ;;
+esac
     # Currently support only HTTPS connection
     if [[ "$ADDONS_URL" == *"https://"* ]]; then
         ADDONS_URL="${ADDONS_URL:8}"
