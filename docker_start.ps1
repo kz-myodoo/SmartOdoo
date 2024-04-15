@@ -344,23 +344,28 @@ function get_enterprise_secret {
 function addons_link_compose {
 
     # https://github.com/rnwood/smtp4dev.git
-    if ( $ADDONS_URL -notlike "*github.com*" )
+    if ( $ADDONS_URL -notlike "*github.com*" -and $ADDONS_URL -notlike "git@github.com*")
     {
         Write-Output "Currently only github URLs accepted"
         display_help
     }
-    # Currently support only HTTPS connection
+    
     if ( $ADDONS_URL -like "*https://*" )
     {
         $ADDONS_URL=$ADDONS_URL.Substring(8)
+        get_addons_secret
+        $script:ADDONS_CLONE_URL="https://$GITHUB_ADDONS_TOKEN@$ADDONS_URL"
+    }
+    elseif ( $ADDONS_URL -like "git@github.com*" )
+    {
+        $script:ADDONS_CLONE_URL=$ADDONS_URL
     }
     else
     {
         Write-Output "Currently only HTTPS URLs are accepted"
         display_help
     }
-    get_addons_secret
-    $script:ADDONS_CLONE_URL="https://$GITHUB_ADDONS_TOKEN@$ADDONS_URL"
+    
 }
 
 function enterprise_link_compose {
