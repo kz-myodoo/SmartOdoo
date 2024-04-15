@@ -226,19 +226,21 @@ addons_link_compose() {
 
     # https://github.com/rnwood/smtp4dev.git
     ADDONS_URL=$1
-    if [[ "${ADDONS_URL}" != *"github.com"* ]]; then
+    if [[ "${ADDONS_URL}" != *"github.com"* ]] && [[ "${ADDONS_URL}" != "git@github.com"* ]]; then
         echo "Currently only github URLs accepted"
         display_help
     fi
     # Currently support only HTTPS connection
     if [[ "$ADDONS_URL" == *"https://"* ]]; then
         ADDONS_URL="${ADDONS_URL:8}"
+        get_addons_secret
+        ADDONS_CLONE_URL="https://${GITHUB_ADDONS_TOKEN}@${ADDONS_URL}"
+    elif [[ "$ADDONS_URL" == "git@github.com"* ]]; then
+        ADDONS_CLONE_URL="${ADDONS_URL}"
     else
         echo "Currently only HTTPS URLs are accepted"
         display_help
     fi
-    get_addons_secret
-    ADDONS_CLONE_URL="https://${GITHUB_ADDONS_TOKEN}@${ADDONS_URL}"
 }
 
 enterprise_link_compose() {
