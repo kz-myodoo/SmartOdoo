@@ -74,7 +74,7 @@ clone_enterprise() {
 
 delete_project() {
     echo "DELETING PROJECT AND VOLUMES"
-    (cd $PROJECT_FULLPATH; docker-compose down -v)
+    (cd $PROJECT_FULLPATH; docker-compose down -v || docker compose down -v)
     echo "DELETING PROJECT DIRECTORY"
     sudo rm -r ${PROJECT_FULLPATH}
 
@@ -86,14 +86,14 @@ project_start() {
     # echo "$RUNNING_CONTAINERS" | wc -l
     if [[ $RUNNING_CONTAINERS == *"$PROJECT_NAME"* ]]; then
         echo "RESTARTING $PROJECT_NAME"
-        (cd $PROJECT_FULLPATH; docker-compose restart)
+        (cd $PROJECT_FULLPATH; docker-compose restart || docker compose restart)
     else
         echo "UPDATE GIT REPO"
         git -C "${PROJECT_FULLPATH}/addons" stash
         git -C "${PROJECT_FULLPATH}/addons" pull
         git -C "${PROJECT_FULLPATH}/addons" stash pop
         echo "STARTING $PROJECT_NAME"
-        (cd $PROJECT_FULLPATH; docker-compose start)
+        (cd $PROJECT_FULLPATH; docker-compose start || docker compose start)
     fi
 }
 
@@ -104,10 +104,10 @@ run_unit_tests(){
     fi
     if [ -v MODULE ]; then
         echo "START ODOO UNIT TESTS ON ($DB) DB FOR ($MODULE) MODULE"
-        (cd $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d ${DB} -i ${MODULE})
+        (cd $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web --test-enable --log-level=test --stop-after-init -d ${DB} -i ${MODULE})
     elif [ -v TEST_TAGS ]; then
         echo "START ODOO UNIT TESTS ON ($DB) DB FOR ($TEST_TAGS) TAGS"
-        (cd $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d ${DB} --test-tags=${TEST_TAGS})
+        (cd $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d ${DB} --test-tags=${TEST_TAGS} || docker compose run --rm web --test-enable --log-level=test --stop-after-init -d ${DB} --test-tags=${TEST_TAGS})
     else
         echo "You need to specify module or tags. Use -m or --tags"
         display_help
@@ -119,7 +119,7 @@ rebuild_container(){
         echo "You need to specify container name that you want to rebuild. Use -r or --rebuild"
         display_help
     fi
-    (cd $PROJECT_FULLPATH; docker-compose up -d --no-deps --force-recreate --build "$CONTAINER_NAME")
+    (cd $PROJECT_FULLPATH; docker-compose up -d --no-deps --force-recreate --build "$CONTAINER_NAME" || docker compose up -d --no-deps --force-recreate --build "$CONTAINER_NAME")
 }
 
 install(){
@@ -127,9 +127,9 @@ install(){
         echo "You need to specify modue name that you want to install. Use --install"
         display_help
     fi
-    (cd $PROJECT_FULLPATH; docker-compose stop web)
-    (cd $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d ${DB} -i ${MODULE})
-    (cd $PROJECT_FULLPATH; docker-compose start web)
+    (cd $PROJECT_FULLPATH; docker-compose stop web || docker compose stop web)
+    (cd $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web --stop-after-init -d ${DB} -i ${MODULE})
+    (cd $PROJECT_FULLPATH; docker-compose start web || docker compose start web)
 }
 
 pip_install(){
@@ -137,7 +137,7 @@ pip_install(){
         echo "You need to specify modue name that you want to install. Use --pip_install"
         display_help
     fi
-    (cd $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install ${PIP_MODULE})
+    (cd $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install ${PIP_MODULE} || docker compose exec web python3 -m pip install ${PIP_MODULE})
 }
 
 project_exist() {
@@ -172,7 +172,7 @@ create_project() {
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull web
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull db
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull smtp4dev
-    docker-compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach
+    docker-compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach || docker compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach
     standarize_env
     chmod a+w "${PROJECT_FULLPATH}/config/odoo.conf"
 }
