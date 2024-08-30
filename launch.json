@@ -12,9 +12,14 @@
                 {
                     "localRoot": "${workspaceFolder}/addons",
                     "remoteRoot": "/mnt/extra-addons"
+                },
+                {
+                    "localRoot": "<odoo_addons_location>",
+                    "remoteRoot": "/usr/lib/python3/dist-packages/odoo/addons"
                 }
             ],
-            "logToFile": true
+            "logToFile": true,
+            "justMyCode": false
         }
     ]
 }
