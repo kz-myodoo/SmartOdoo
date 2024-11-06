@@ -174,6 +174,7 @@ create_project() {
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull smtp4dev
     docker-compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach || docker compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach
     standarize_env
+    chmod a+w "${PROJECT_FULLPATH}/config"
     chmod a+w "${PROJECT_FULLPATH}/config/odoo.conf"
 }
 
