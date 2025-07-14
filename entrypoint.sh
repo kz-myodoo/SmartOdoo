@@ -9,20 +9,6 @@ set -e
 : ${USER:=${DB_ENV_POSTGRES_USER:=${PSQL_DB_USERNAME:='odoo'}}}
 : ${PASSWORD:=${DB_ENV_POSTGRES_PASSWORD:=${PSQL_DB_PASSWORD:='odoo'}}}
 
-# install python packages
-pip3 install --break-system-packages pip --upgrade || pip3 install pip --upgrade # Version with --break-system-packages is for odoo18 +
-if [[ -f "/mnt/extra-addons/requirements.txt" ]]; then
-    pip3 install --break-system-packages -r /mnt/extra-addons/requirements.txt || pip3 install -r /mnt/extra-addons/requirements.txt
-fi
-
-# install debugpy package for debugging
-pip3 install --break-system-packages debugpy || pip3 install debugpy
-
-# install often required paskages
-pip3 install --break-system-packages html2text suds || pip3 install html2text suds
-
-# sed -i 's|raise werkzeug.exceptions.BadRequest(msg)|self.jsonrequest = {}|g' /usr/lib/python3/dist-packages/odoo/http.py
-
 DB_ARGS=()
 function check_config() {
     param="$1"

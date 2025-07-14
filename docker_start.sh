@@ -160,6 +160,7 @@ project_exist() {
 create_project() {
     echo "CREATE PROJECT"
     cp -r ./config/* "${PROJECT_FULLPATH}/config/"
+    cp -r ./Dockerfile "${PROJECT_FULLPATH}/"
     cp -r ./docker-compose.yml "${PROJECT_FULLPATH}/"
     cp -r ./entrypoint.sh "${PROJECT_FULLPATH}/"
     cp -r ./launch.json "${PROJECT_FULLPATH}/.vscode/"

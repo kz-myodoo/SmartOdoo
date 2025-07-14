@@ -186,7 +186,7 @@ function pip_install {
     $location = Get-Location
     if ( $PIP_MODULE )
     {
-        Set-Location $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install $PIP_MODULE
+        Set-Location $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install --break-system-packages $PIP_MODULE
         Set-Location $location
     }
     else
@@ -227,6 +227,7 @@ function project_exist {
 function create_project {
     Write-Output "CREATE PROJECT"
     Copy-Item .\config\* -Destination $PROJECT_FULLPATH\config\ -Recurse
+    Copy-Item .\Dockerfile -Destination $PROJECT_FULLPATH\ -Recurse
     Copy-Item .\docker-compose.yml -Destination $PROJECT_FULLPATH\ -Recurse
     Copy-Item .\entrypoint.sh -Destination $PROJECT_FULLPATH\ -Recurse
     # Change CRLF to LF

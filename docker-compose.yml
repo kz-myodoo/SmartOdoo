@@ -1,7 +1,11 @@
 version: '3.2'
 services:
   web:
-    image: odoo:${ODOO_VER}
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - ODOO_VER=${ODOO_VER}
     container_name: ${ODOO_CONT_NAME}
     depends_on:
       - db
