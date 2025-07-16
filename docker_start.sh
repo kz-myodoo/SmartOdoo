@@ -124,7 +124,7 @@ rebuild_container(){
 
 install(){
     if [ -z INSTALL_MODULE ] || [ "$INSTALL_MODULE" == "" ]; then
-        echo "You need to specify modue name that you want to install. Use --install"
+        echo "You need to specify module name that you want to install. Use --install"
         display_help
     fi
     (cd $PROJECT_FULLPATH; docker-compose stop web || docker compose stop web)
@@ -134,10 +134,10 @@ install(){
 
 pip_install(){
     if [ -z PIP_MODULE ] || [ "$PIP_MODULE" == "" ]; then
-        echo "You need to specify modue name that you want to install. Use --pip_install"
+        echo "You need to specify module name that you want to install. Use --pip_install"
         display_help
     fi
-    (cd $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install ${PIP_MODULE} || docker compose exec web python3 -m pip install ${PIP_MODULE})
+    (cd $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install ${PIP_MODULE} || docker compose exec web python3 -m pip install --break-system-packages ${PIP_MODULE})
 }
 
 project_exist() {
@@ -150,7 +150,7 @@ project_exist() {
         rebuild_container
     elif [ ! -z "${INSTALL_MODULE}" ]; then
         install
-    elif [ ! -z "${PIP_INSTALL}" ]; then 
+    elif [ ! -z "${PIP_MODULE}" ]; then 
         pip_install
     else
         project_start
@@ -340,8 +340,8 @@ while :; do
         CONTAINER_NAME="$2"
         shift 2
         ;;
-    --rebuild)
-        PIP_INSTALL="$2"
+    --pip_install)
+        PIP_MODULE="$2"
         shift 2
         ;;
     --install)
