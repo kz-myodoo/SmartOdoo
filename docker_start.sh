@@ -14,9 +14,11 @@ ODOO_VER="15.0"
 PSQL_VER="13"
 PROJECTS_DIR="${HOME}/Dokumenty/DockerProjects/"
 ENTERPRISE_LOCATION="$(pwd)/enterprise"
+UPGRADE_UTIL_LOCATION="$(pwd)/upgrade-util"
 # Odoo
 ODOO_GITHUB_NAME="odoo"
 ODOO_ENTERPRISE_REPOSITORY="enterprise"
+UPGRADE_UTIL_REPOSITORY="git@github.com:odoo/upgrade-util.git"
 ############################################################
 # Functions                                                #
 ############################################################
@@ -25,6 +27,7 @@ customize_env() {
     # CUSTOMIZE .ENV VARIABLES
     sed -i "s|^PROJECT_NAME=TEST_PROJECT *|PROJECT_NAME=$PROJECT_NAME|g" .env
     sed -i "s|^ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION *|ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION/$ODOO_VER|g" .env
+    sed -i "s|^UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION *|UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION|g" .env
     sed -i "s|^ODOO_VER=15.0 *|ODOO_VER=$ODOO_VER|g" .env
     sed -i "s|^PSQL_VER=13 *|PSQL_VER=$PSQL_VER|g" .env
     sed -i "s|^ODOO_CONT_NAME=ODOO_TEMP_CONT *|ODOO_CONT_NAME=$PROJECT_NAME-web|g" .env
@@ -41,6 +44,7 @@ standarize_env() {
     # RETURN TO STANDARD .ENV VARIABLES
     sed -i "s|^PROJECT_NAME=$PROJECT_NAME|PROJECT_NAME=TEST_PROJECT|g" .env
     sed -i "s|^ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION/$ODOO_VER|ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION|g" .env
+    sed -i "s|^UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION|UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION|g" .env
     sed -i "s|^ODOO_VER=$ODOO_VER*|ODOO_VER=15.0|g" .env
     sed -i "s|^PSQL_VER=$PSQL_VER*|PSQL_VER=13|g" .env
     sed -i "s|^ODOO_CONT_NAME=$PROJECT_NAME-web *|ODOO_CONT_NAME=ODOO_TEMP_CONT |g" .env
@@ -72,6 +76,15 @@ clone_enterprise() {
     fi
 }
 
+get_upgrade_util() {
+    if ! [ -d "$UPGRADE_UTIL_LOCATION" ]; then
+        mkdir -p "$UPGRADE_UTIL_LOCATION"
+        git -C "$UPGRADE_UTIL_LOCATION" clone --depth 1 "${UPGRADE_UTIL_REPOSITORY}" .
+    else
+        git -C "$UPGRADE_UTIL_LOCATION" pull
+    fi   
+}
+
 delete_project() {
     echo "DELETING PROJECT AND VOLUMES"
     (cd $PROJECT_FULLPATH; docker-compose down -v || docker compose down -v)
@@ -86,14 +99,22 @@ project_start() {
     # echo "$RUNNING_CONTAINERS" | wc -l
     if [[ $RUNNING_CONTAINERS == *"$PROJECT_NAME"* ]]; then
         echo "RESTARTING $PROJECT_NAME"
-        (cd $PROJECT_FULLPATH; docker-compose restart || docker compose restart)
+        if [ ! -z "${WITH_UPGRADE}" ]; then
+            run_with_upgrade
+        else
+            (cd $PROJECT_FULLPATH; docker-compose restart || docker compose restart)
+        fi
     else
         echo "UPDATE GIT REPO"
         git -C "${PROJECT_FULLPATH}/addons" stash
         git -C "${PROJECT_FULLPATH}/addons" pull
         git -C "${PROJECT_FULLPATH}/addons" stash pop
         echo "STARTING $PROJECT_NAME"
-        (cd $PROJECT_FULLPATH; docker-compose start || docker compose start)
+        if [ ! -z "${WITH_UPGRADE}" ]; then
+            run_with_upgrade
+        else
+            (cd $PROJECT_FULLPATH; docker-compose start || docker compose start)
+        fi
     fi
 }
 
@@ -114,6 +135,11 @@ run_unit_tests(){
     fi
 }
 
+run_unit_tests(){
+    (cd $PROJECT_FULLPATH; docker-compose stop web || docker compose stop web)
+    (cd $PROJECT_FULLPATH; docker-compose run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload || docker compose run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload)
+}
+
 rebuild_container(){
     if [ -z CONTAINER_NAME ] || [ "$CONTAINER_NAME" == "" ]; then
         echo "You need to specify container name that you want to rebuild. Use -r or --rebuild"
@@ -128,8 +154,12 @@ install(){
         display_help
     fi
     (cd $PROJECT_FULLPATH; docker-compose stop web || docker compose stop web)
-    (cd $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web --stop-after-init -d ${DB} -i ${MODULE})
-    (cd $PROJECT_FULLPATH; docker-compose start web || docker compose start web)
+    if [ ! -z "${WITH_UPGRADE}" ]; then
+        (cd $PROJECT_FULLPATH; docker-compose run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --stop-after-init -d ${DB} -i ${MODULE})
+    else
+        (cd $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web --stop-after-init -d ${DB} -i ${MODULE})
+        (cd $PROJECT_FULLPATH; docker-compose start web || docker compose start web)
+    fi
 }
 
 pip_install(){
@@ -168,6 +198,7 @@ create_project() {
     if [ ! -z "${INSTALL_ENTERPRISE_MODULES}" ]; then
         clone_enterprise
     fi
+    get_upgrade_util
     customize_env
     cp -r ./.env "${PROJECT_FULLPATH}/"
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull web
@@ -276,6 +307,7 @@ display_help() {
     echo "       --pip_install              (N)  Install pip module on web container"
     echo "       --install                       Restart container and install module given by -m parameter"
     echo "                                       on database in --db parameter"
+    echo "   -u, --upgrade                        Run container with upgrade-util. Require --db parameter."
     echo "   -r, --rebuild                  (N)  Rebuild container in project with given name"
     echo "   -t, --test                          Run tests."
     echo "   -m, --module                   (N)  Module to test(-t) or install(--install)"
@@ -291,7 +323,7 @@ display_help() {
 # Process the input options. Add options as needed.        #
 ############################################################
 
-PARSED_ARGS=$(getopt -a -o n:o:p:a:b:m:r:edth -l name:,odoo:,psql:,addons:,branch:,module:,db:,tags:,rebuild:,pip_install:,install,enterprise,delete,test,help -- "$@")
+PARSED_ARGS=$(getopt -a -o n:o:p:a:b:m:r:eduth -l name:,odoo:,psql:,addons:,branch:,module:,db:,tags:,rebuild:,pip_install:,install,enterprise,delete,upgrade,test,help -- "$@")
 VALID_ARGS=$?
 if [ "$VALID_ARGS" != "0" ]; then
     display_help
@@ -326,6 +358,10 @@ while :; do
         ;;
     -d | --delete)
         DELETE='T'
+        shift
+        ;;
+    -u | --upgrade)
+        WITH_UPGRADE='T'
         shift
         ;;
     -t | --test)

@@ -21,7 +21,7 @@ services:
       - ${PROJECT_LOCATION}/entrypoint.sh:/entrypoint.sh
       - ${PROJECT_LOCATION}/config:/etc/odoo
       - ${PROJECT_LOCATION}/addons:/mnt/extra-addons
-      # - ${PROJECT_LOCATION}/enterprise:/mnt/enterprise
+      - ${UPGRADE_UTIL_LOCATION}:/mnt/upgrade-util
       - ${ENTERPRISE_LOCATION}:/mnt/enterprise
     restart: on-failure
   db:

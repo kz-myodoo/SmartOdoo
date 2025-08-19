@@ -1,4 +1,5 @@
 /secret
 /secret/*
 /enterprise/*
+/upgrade-util/*
 /odoo

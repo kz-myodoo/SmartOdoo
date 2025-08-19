@@ -23,6 +23,8 @@ param(
 
     [Alias('install')] [switch] $INSTALL_MODULE,
     
+    [Alias('u', 'upgrade')] [switch] $WITH_UPGRADE,
+
     [Alias('t', 'test')] [switch] $RUN_TEST,
 
     [Alias('m', 'module')] $ODOO_MODULE,
@@ -42,13 +44,15 @@ param(
 # Flags
 
 # Variables
-# $ODOO_VER="15.0"
-# $PSQL_VER="13"
+# $ODOO_VER="18.0"
+# $PSQL_VER="14"
 $PROJECTS_DIR=(Get-Location) -replace "SmartOdoo", "DockerProjects"
 $ENTERPRISE_LOCATION="$(Get-Location)\enterprise"
+$UPGRADE_UTIL_LOCATION="$(Get-Location)\upgrade-util"
 # Odoo
 $ODOO_GITHUB_NAME="odoo"
 $ODOO_ENTERPRISE_REPOSITORY="enterprise"
+$UPGRADE_UTIL_REPOSITORY="git@github.com:odoo/upgrade-util.git"
 ############################################################
 # Functions                                                #
 ############################################################
@@ -57,6 +61,7 @@ function customize_env {
     # CUSTOMIZE .ENV VARIABLES
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PROJECT_NAME=TEST_PROJECT", "PROJECT_NAME=$PROJECT_NAME" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION", "ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION\$ODOO_VER" } | Set-Content .env
+    (Get-Content .\.env) | ForEach-Object { $_ -replace "UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION", "UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_VER=15.0", "ODOO_VER=$ODOO_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_VER=13", "PSQL_VER=$PSQL_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_CONT_NAME=ODOO_TEMP_CONT", "ODOO_CONT_NAME=$PROJECT_NAME-web" } | Set-Content .env
@@ -71,6 +76,7 @@ function standarize_env {
     # RETURN TO STANDARD .ENV VARIABLES
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PROJECT_NAME=$PROJECT_NAME", "PROJECT_NAME=TEST_PROJECT" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace [regex]::Escape("ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION\$ODOO_VER"), "ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION" } | Set-Content .env
+    (Get-Content .\.env) | ForEach-Object { $_ -replace [regex]::Escape("UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION"), "UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_VER=$ODOO_VER", "ODOO_VER=15.0" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_VER=$PSQL_VER", "PSQL_VER=13" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_CONT_NAME=$PROJECT_NAME-web", "ODOO_CONT_NAME=ODOO_TEMP_CONT" } | Set-Content .env
@@ -108,6 +114,18 @@ function clone_enterprise {
     }
 }
 
+function get_upgrade_util {
+    if (-not(Test-Path -Path $UPGRADE_UTIL_LOCATION))
+    {
+        New-Item "$UPGRADE_UTIL_LOCATION" -ItemType "directory"
+        git -C "$UPGRADE_UTIL_LOCATION" clone --depth 1 $UPGRADE_UTIL_REPOSITORY .
+    }
+    else
+    {
+        git -C "$UPGRADE_UTIL_LOCATION" pull
+    }
+}
+
 function delete_project {
     Write-Output "DELETING PROJECT AND VOLUMES"
     $location = Get-Location
@@ -124,7 +142,14 @@ function project_start {
     {
         Write-Output "RESTARTING $PROJECT_NAME"
         $location = Get-Location
-        Set-Location $PROJECT_FULLPATH; docker-compose restart
+        if ($WITH_UPGRADE)
+        {
+            run_with_upgrade
+        }
+        else
+        {
+            Set-Location $PROJECT_FULLPATH; docker-compose restart
+        }
         Set-Location $location
     }
     else
@@ -135,7 +160,14 @@ function project_start {
         git -C "$PROJECT_FULLPATH/addons" stash pop
         Write-Output "STARTING $PROJECT_NAME"
         $location = Get-Location
-        Set-Location $PROJECT_FULLPATH; docker-compose start
+        if ($WITH_UPGRADE)
+        {
+            run_with_upgrade
+        }
+        else
+        {
+            Set-Location $PROJECT_FULLPATH; docker-compose start
+        }
         Set-Location $location
     }
 }
@@ -166,13 +198,27 @@ function run_unit_tests {
     }
 }
 
+function run_with_upgrade {
+    $location = Get-Location
+    Set-Location $PROJECT_FULLPATH; docker-compose stop web
+    Set-Location $PROJECT_FULLPATH; docker-compose run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload
+    Set-Location $location
+}
+
 function install {
     $location = Get-Location
     if ( $INSTALL_MODULE )
     {
         Set-Location $PROJECT_FULLPATH; docker-compose stop web
-        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d $DATABASE -i $ODOO_MODULE
-        Set-Location $PROJECT_FULLPATH; docker-compose start
+        if ($WITH_UPGRADE)
+        {
+            Set-Location $PROJECT_FULLPATH; docker-compose run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --stop-after-init -d $DATABASE -i $ODOO_MODULE --upgrade-path=/mnt/upgrade-util/src
+        }
+        else
+        {
+            Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d $DATABASE -i $ODOO_MODULE
+            Set-Location $PROJECT_FULLPATH; docker-compose start
+        }
         Set-Location $location
     }
     else
@@ -238,6 +284,7 @@ function create_project {
     {
         clone_enterprise
     }
+    get_upgrade_util
     customize_env
     Copy-Item .\.env -Destination $PROJECT_FULLPATH\ -Recurse
     docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull web
@@ -399,6 +446,7 @@ function display_help {
     Write-Output "    -pip_install              (N)  Install pip module on web container"
     Write-Output "    -install                       Restart container and install module given by -m parameter"
     Write-Output "                                   on database in --db parameter"
+    Write-Output "-u, -upgrade                       Run container with upgrade-util. Require --db parameter."
     Write-Output "-r, -rebuild                  (N)  Rebuild container in project with given name"
     Write-Output "-t, -test                          Run tests."
     Write-Output "-m, -module                   (N)  Module to test(-t) or install(--install)"
