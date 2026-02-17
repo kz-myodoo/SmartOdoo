@@ -1,0 +1,4 @@
+psql/
+.git/
+.venv/
+.vscode/

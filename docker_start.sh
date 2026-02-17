@@ -149,7 +149,7 @@ rebuild_container(){
 }
 
 install(){
-    if [ -z INSTALL_MODULE ] || [ "$INSTALL_MODULE" == "" ]; then
+    if [ -z "$INSTALL_MODULE" ] || [ "$INSTALL_MODULE" == "" ]; then
         echo "You need to specify module name that you want to install. Use --install"
         display_help
     fi
@@ -157,7 +157,7 @@ install(){
     if [ ! -z "${WITH_UPGRADE}" ]; then
         (cd $PROJECT_FULLPATH; docker-compose run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --stop-after-init -d ${DB} -i ${MODULE})
     else
-        (cd $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web --stop-after-init -d ${DB} -i ${MODULE})
+        (cd $PROJECT_FULLPATH; docker-compose run --rm web /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --stop-after-init -d ${DB} -i ${MODULE} || docker compose run --rm web /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --stop-after-init -d ${DB} -i ${MODULE})
         (cd $PROJECT_FULLPATH; docker-compose start web || docker compose start web)
     fi
 }
@@ -191,6 +191,7 @@ create_project() {
     echo "CREATE PROJECT"
     cp -r ./config/* "${PROJECT_FULLPATH}/config/"
     cp -r ./Dockerfile "${PROJECT_FULLPATH}/"
+    cp -r ./.dockerignore "${PROJECT_FULLPATH}/"
     cp -r ./docker-compose.yml "${PROJECT_FULLPATH}/"
     cp -r ./entrypoint.sh "${PROJECT_FULLPATH}/"
     cp -r ./launch.json "${PROJECT_FULLPATH}/.vscode/"

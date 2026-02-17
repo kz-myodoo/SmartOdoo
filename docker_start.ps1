@@ -274,6 +274,7 @@ function create_project {
     Write-Output "CREATE PROJECT"
     Copy-Item .\config\* -Destination $PROJECT_FULLPATH\config\ -Recurse
     Copy-Item .\Dockerfile -Destination $PROJECT_FULLPATH\ -Recurse
+    Copy-Item .\.dockerignore -Destination $PROJECT_FULLPATH\ -Recurse
     Copy-Item .\docker-compose.yml -Destination $PROJECT_FULLPATH\ -Recurse
     Copy-Item .\entrypoint.sh -Destination $PROJECT_FULLPATH\ -Recurse
     # Change CRLF to LF
