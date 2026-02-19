@@ -97,6 +97,11 @@ function clone_addons {
             git -C $PROJECT_FULLPATH clone $ADDONS_CLONE_URL addons 
         }
     }
+    else
+    {
+        # This is added to copy it instead of addons/requirements.txt in case when addons repository is not given. It is needed to not break docker build.
+        New-Item -Path "$PROJECT_FULLPATH/.docker_placeholder" -ItemType "File"
+    }
 }
 function clone_enterprise {
     enterprise_link_compose

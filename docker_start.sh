@@ -62,6 +62,9 @@ clone_addons() {
         else
             git -C "${PROJECT_FULLPATH}" clone "${ADDONS_CLONE_URL}" addons 
         fi
+    else
+        # This is added to copy it instead of addons/requirements.txt in case when addons repository is not given. It is needed to not break docker build.
+        touch "${PROJECT_FULLPATH}/.docker_placeholder"
     fi
 }
 clone_enterprise() {

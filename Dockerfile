@@ -10,8 +10,8 @@ SHELL ["/bin/bash", "-xo", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements.txt to the image
-COPY addons/requirements.tx[t] /mnt/extra-addons/
+# Copy requirements.txt to the image or .docker_placeholder if addons direcotiry with requirements.txt is not present.
+COPY .docker_placeholde[r] [a]ddons/requirements.tx[t] /mnt/extra-addons/
 
 # install python packages
 RUN if test -f '/mnt/extra-addons/requirements.txt'; then \
