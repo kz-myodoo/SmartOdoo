@@ -1,4 +1,3 @@
-version: '3.2'
 services:
   web:
     build: 
@@ -6,6 +5,7 @@ services:
       dockerfile: Dockerfile
       args:
         - ODOO_VER=${ODOO_VER}
+        - ODOO_REVISION=${ODOO_REVISION}
     container_name: ${ODOO_CONT_NAME}
     depends_on:
       - db

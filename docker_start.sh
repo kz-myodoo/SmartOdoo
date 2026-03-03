@@ -11,6 +11,7 @@
 
 # Variables
 ODOO_VER="15.0"
+ODOO_REVISION=""
 PSQL_VER="13"
 PROJECTS_DIR="${HOME}/Dokumenty/DockerProjects/"
 ENTERPRISE_LOCATION="$(pwd)/enterprise"
@@ -29,6 +30,7 @@ customize_env() {
     sed -i "s|^ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION *|ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION/$ODOO_VER|g" .env
     sed -i "s|^UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION *|UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION|g" .env
     sed -i "s|^ODOO_VER=15.0 *|ODOO_VER=$ODOO_VER|g" .env
+    sed -i "s|^ODOO_REVISION= *|ODOO_REVISION=$ODOO_REVISION|g" .env
     sed -i "s|^PSQL_VER=13 *|PSQL_VER=$PSQL_VER|g" .env
     sed -i "s|^ODOO_CONT_NAME=ODOO_TEMP_CONT *|ODOO_CONT_NAME=$PROJECT_NAME-web|g" .env
     sed -i "s|^PSQL_CONT_NAME=PSQL_TEMP_CONT *|PSQL_CONT_NAME=$PROJECT_NAME-db|g" .env
@@ -46,6 +48,7 @@ standarize_env() {
     sed -i "s|^ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION/$ODOO_VER|ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION|g" .env
     sed -i "s|^UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION|UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION|g" .env
     sed -i "s|^ODOO_VER=$ODOO_VER*|ODOO_VER=15.0|g" .env
+    sed -i "s|^ODOO_REVISION=$ODOO_REVISION|ODOO_REVISION=|g" .env
     sed -i "s|^PSQL_VER=$PSQL_VER*|PSQL_VER=13|g" .env
     sed -i "s|^ODOO_CONT_NAME=$PROJECT_NAME-web *|ODOO_CONT_NAME=ODOO_TEMP_CONT |g" .env
     sed -i "s|^PSQL_CONT_NAME=$PROJECT_NAME-db *|PSQL_CONT_NAME=PSQL_TEMP_CONT |g" .env
@@ -138,7 +141,7 @@ run_unit_tests(){
     fi
 }
 
-run_unit_tests(){
+run_with_upgrade(){
     (cd $PROJECT_FULLPATH; docker-compose stop web || docker compose stop web)
     (cd $PROJECT_FULLPATH; docker-compose run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload || docker compose run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload)
 }
@@ -192,6 +195,7 @@ project_exist() {
 
 create_project() {
     echo "CREATE PROJECT"
+    customize_env
     cp -r ./config/* "${PROJECT_FULLPATH}/config/"
     cp -r ./Dockerfile "${PROJECT_FULLPATH}/"
     cp -r ./.dockerignore "${PROJECT_FULLPATH}/"
@@ -203,12 +207,11 @@ create_project() {
         clone_enterprise
     fi
     get_upgrade_util
-    customize_env
     cp -r ./.env "${PROJECT_FULLPATH}/"
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull web
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull db
     docker compose -f $PROJECT_FULLPATH/docker-compose.yml pull smtp4dev
-    docker-compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach || docker compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach
+    docker-compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach || docker compose -p "${PROJECT_NAME}" -f "${PROJECT_FULLPATH}/docker-compose.yml" up --detach --build
     standarize_env
     chmod a+w "${PROJECT_FULLPATH}/config"
     chmod a+w "${PROJECT_FULLPATH}/config/odoo.conf"
@@ -236,8 +239,19 @@ check_project() {
 
 check_odoo_version() {
     ODOO_VER=$1
-    if [ ${ODOO_VER: -2} != ".0" ]; then
-        ODOO_VER+=".0"
+    if [[ $ODOO_VER == *-* ]]; then
+        VERSION=${ODOO_VER%-*}
+        REVISION=${ODOO_VER#*-}
+        if [[ $VERSION =~ ^[0-9]+$ ]]; then
+            VERSION="${VERSION}.0"
+        fi
+        ODOO_VER="${VERSION}"
+        ODOO_REVISION="-${REVISION}"
+    else
+        if [[ $ODOO_VER =~ ^[0-9]+$ ]]; then
+            ODOO_VER="${ODOO_VER}.0"
+        fi
+        ODOO_REVISION=""
     fi
 }
 

@@ -44,8 +44,7 @@ param(
 # Flags
 
 # Variables
-# $ODOO_VER="18.0"
-# $PSQL_VER="14"
+$ODOO_REVISION=""
 $PROJECTS_DIR=(Get-Location) -replace "SmartOdoo", "DockerProjects"
 $ENTERPRISE_LOCATION="$(Get-Location)\enterprise"
 $UPGRADE_UTIL_LOCATION="$(Get-Location)\upgrade-util"
@@ -57,12 +56,22 @@ $UPGRADE_UTIL_REPOSITORY="git@github.com:odoo/upgrade-util.git"
 # Functions                                                #
 ############################################################
 
+function run_compose {
+    param([string]$cmd)
+    try {
+        Invoke-Expression "docker-compose $cmd" 2>$null
+        if ($LASTEXITCODE -eq 0) { return }
+    } catch {}
+    Invoke-Expression "docker compose $cmd"
+}
+
 function customize_env {
     # CUSTOMIZE .ENV VARIABLES
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PROJECT_NAME=TEST_PROJECT", "PROJECT_NAME=$PROJECT_NAME" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION", "ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION\$ODOO_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION", "UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_VER=15.0", "ODOO_VER=$ODOO_VER" } | Set-Content .env
+    (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_REVISION=", "ODOO_REVISION=$ODOO_REVISION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_VER=13", "PSQL_VER=$PSQL_VER" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_CONT_NAME=ODOO_TEMP_CONT", "ODOO_CONT_NAME=$PROJECT_NAME-web" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_CONT_NAME=PSQL_TEMP_CONT", "PSQL_CONT_NAME=$PROJECT_NAME-db" } | Set-Content .env
@@ -78,6 +87,7 @@ function standarize_env {
     (Get-Content .\.env) | ForEach-Object { $_ -replace [regex]::Escape("ENTERPRISE_LOCATION=$ENTERPRISE_LOCATION\$ODOO_VER"), "ENTERPRISE_LOCATION=TEST_ENTERPRISE_LOCATION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace [regex]::Escape("UPGRADE_UTIL_LOCATION=$UPGRADE_UTIL_LOCATION"), "UPGRADE_UTIL_LOCATION=TEST_UTIL_LOCATION" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_VER=$ODOO_VER", "ODOO_VER=15.0" } | Set-Content .env
+    (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_REVISION=$ODOO_REVISION", "ODOO_REVISION=" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_VER=$PSQL_VER", "PSQL_VER=13" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "ODOO_CONT_NAME=$PROJECT_NAME-web", "ODOO_CONT_NAME=ODOO_TEMP_CONT" } | Set-Content .env
     (Get-Content .\.env) | ForEach-Object { $_ -replace "PSQL_CONT_NAME=$PROJECT_NAME-db", "PSQL_CONT_NAME=PSQL_TEMP_CONT" } | Set-Content .env
@@ -134,7 +144,7 @@ function get_upgrade_util {
 function delete_project {
     Write-Output "DELETING PROJECT AND VOLUMES"
     $location = Get-Location
-    Set-Location $PROJECT_FULLPATH; docker-compose down -v
+    Set-Location $PROJECT_FULLPATH; run_compose "down -v"
     Set-Location $location
     Write-Output "DELETING PROJECT DIRECTORY"
     Remove-Item $PROJECT_FULLPATH -Recurse -Force
@@ -153,7 +163,7 @@ function project_start {
         }
         else
         {
-            Set-Location $PROJECT_FULLPATH; docker-compose restart
+            Set-Location $PROJECT_FULLPATH; run_compose "restart"
         }
         Set-Location $location
     }
@@ -171,7 +181,7 @@ function project_start {
         }
         else
         {
-            Set-Location $PROJECT_FULLPATH; docker-compose start
+            Set-Location $PROJECT_FULLPATH; run_compose "start"
         }
         Set-Location $location
     }
@@ -187,13 +197,13 @@ function run_unit_tests {
     if ( $null -ne $ODOO_MODULE )
     {
         Write-Output "START ODOO UNIT TESTS ON ($DATABASE) DB FOR ($ODOO_MODULE) MODULE"
-        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d $DATABASE -i $ODOO_MODULE
+        Set-Location $PROJECT_FULLPATH; run_compose "run --rm web --test-enable --log-level=test --stop-after-init -d $DATABASE -i $ODOO_MODULE"
         Set-Location $location
     }
     elseif ( $null -ne $TEST_TAGS )
     {
         Write-Output "START ODOO UNIT TESTS ON ($DATABASE) DB FOR ($TEST_TAGS) TAGS"
-        Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --test-enable --log-level=test --stop-after-init -d $DATABASE --test-tags=$TEST_TAGS
+        Set-Location $PROJECT_FULLPATH; run_compose "run --rm web --test-enable --log-level=test --stop-after-init -d $DATABASE --test-tags=$TEST_TAGS"
         Set-Location $location
     }
     else
@@ -205,8 +215,8 @@ function run_unit_tests {
 
 function run_with_upgrade {
     $location = Get-Location
-    Set-Location $PROJECT_FULLPATH; docker-compose stop web
-    Set-Location $PROJECT_FULLPATH; docker-compose run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload
+    Set-Location $PROJECT_FULLPATH; run_compose "stop web"
+    Set-Location $PROJECT_FULLPATH; run_compose "run --rm --name=web_upgrade web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --upgrade-path=/mnt/upgrade-util/src --dev reload"
     Set-Location $location
 }
 
@@ -214,15 +224,15 @@ function install {
     $location = Get-Location
     if ( $INSTALL_MODULE )
     {
-        Set-Location $PROJECT_FULLPATH; docker-compose stop web
+        Set-Location $PROJECT_FULLPATH; run_compose "stop web"
         if ($WITH_UPGRADE)
         {
-            Set-Location $PROJECT_FULLPATH; docker-compose run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --stop-after-init -d $DATABASE -i $ODOO_MODULE --upgrade-path=/mnt/upgrade-util/src
+            Set-Location $PROJECT_FULLPATH; run_compose "run --rm web /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --stop-after-init -d $DATABASE -i $ODOO_MODULE --upgrade-path=/mnt/upgrade-util/src"
         }
         else
         {
-            Set-Location $PROJECT_FULLPATH; docker-compose run --rm web --stop-after-init -d $DATABASE -i $ODOO_MODULE
-            Set-Location $PROJECT_FULLPATH; docker-compose start
+            Set-Location $PROJECT_FULLPATH; run_compose "run --rm web --stop-after-init -d $DATABASE -i $ODOO_MODULE"
+            Set-Location $PROJECT_FULLPATH; run_compose "start"
         }
         Set-Location $location
     }
@@ -237,7 +247,7 @@ function pip_install {
     $location = Get-Location
     if ( $PIP_MODULE )
     {
-        Set-Location $PROJECT_FULLPATH; docker-compose exec web python3 -m pip install --break-system-packages $PIP_MODULE
+        Set-Location $PROJECT_FULLPATH; run_compose "exec web python3 -m pip install --break-system-packages $PIP_MODULE"
         Set-Location $location
     }
     else
@@ -277,6 +287,7 @@ function project_exist {
 
 function create_project {
     Write-Output "CREATE PROJECT"
+    customize_env
     Copy-Item .\config\* -Destination $PROJECT_FULLPATH\config\ -Recurse
     Copy-Item .\Dockerfile -Destination $PROJECT_FULLPATH\ -Recurse
     Copy-Item .\.dockerignore -Destination $PROJECT_FULLPATH\ -Recurse
@@ -291,12 +302,11 @@ function create_project {
         clone_enterprise
     }
     get_upgrade_util
-    customize_env
     Copy-Item .\.env -Destination $PROJECT_FULLPATH\ -Recurse
-    docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull web
-    docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull db
-    docker compose -f $PROJECT_FULLPATH\docker-compose.yml pull smtp4dev
-    docker-compose -p $PROJECT_NAME -f $PROJECT_FULLPATH\docker-compose.yml up --detach
+    run_compose "-f $PROJECT_FULLPATH\docker-compose.yml pull web"
+    run_compose "-f $PROJECT_FULLPATH\docker-compose.yml pull db"
+    run_compose "-f $PROJECT_FULLPATH\docker-compose.yml pull smtp4dev"
+    run_compose "-p $PROJECT_NAME -f $PROJECT_FULLPATH\docker-compose.yml up --detach"
     standarize_env
 }
 
@@ -332,13 +342,26 @@ function rebuild_container(){
         display_help
     }
     $location = Get-Location
-    Set-Location $PROJECT_FULLPATH; docker-compose up -d --no-deps --force-recreate --build "$CONTAINER_NAME"
+    Set-Location $PROJECT_FULLPATH; run_compose "up -d --no-deps --force-recreate --build `"$CONTAINER_NAME`""
     Set-Location $location
 }
-function check_odoo_version {
-    if ( $ODOO_VER.Substring(2) -ne ".0" )
-    {
-        $script:ODOO_VER="$ODOO_VER.0"
+function check_odoo_version($value) {
+    if ($value -like "*-*") {
+        $parts = $value -split '-', 2
+        $version = $parts[0]
+        $revision = $parts[1]
+        if ($version -match '^\d+$') {
+            $version = "$version.0"
+        }
+        $script:ODOO_VER = "$version"
+        $script:ODOO_REVISION = "-$revision"
+    } else {
+        if ($value -match '^\d+$') {
+            $script:ODOO_VER = "$value.0"
+        } else {
+            $script:ODOO_VER = $value
+        }
+        $script:ODOO_REVISION = ""
     }
 }
 
@@ -471,7 +494,7 @@ if($PSBoundParameters.Count -eq 0) {
 }
 if ($null -ne $ODOO_VER)
 {
-    check_odoo_version
+    check_odoo_version $ODOO_VER
 }
 if ($null -ne $PSQL_VER)
 {
