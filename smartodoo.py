@@ -157,11 +157,24 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def write_text_lf(path: Path, content: str) -> None:
+    """Write UTF-8 text content with Unix LF line endings."""
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+
+
+def normalize_to_lf(path: Path) -> None:
+    """Normalize a text file to LF line endings."""
+    content = read_text(path)
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
+    write_text_lf(path, content)
+
+
 def replace_line(content: str, key: str, value: str) -> str:
     """Replace a KEY=value line in env-like text content."""
     pattern = rf"^{re.escape(key)}=.*$"
     replacement = f"{key}={value}"
-    return re.sub(pattern, replacement, content, flags=re.MULTILINE)
+    return re.sub(pattern, lambda _match: replacement, content, flags=re.MULTILINE)
 
 
 def customize_env(project_name: str, project_fullpath: Path, odoo_ver: str, psql_ver: str) -> None:
@@ -489,6 +502,10 @@ def pip_install(project_fullpath: Path, pip_module: Optional[str]) -> None:
 
 def project_exist(args: argparse.Namespace, project_fullpath: Path) -> None:
     """Execute action flow for an existing project."""
+    entrypoint_path = project_fullpath / "entrypoint.sh"
+    if entrypoint_path.exists():
+        normalize_to_lf(entrypoint_path)
+
     if args.delete:
         delete_project(project_fullpath)
         raise SystemExit(1)
@@ -517,6 +534,7 @@ def copy_required_files(project_fullpath: Path) -> None:
     shutil.copy2(DOCKERIGNORE, project_fullpath / ".dockerignore")
     shutil.copy2(DOCKER_COMPOSE, project_fullpath / "docker-compose.yml")
     shutil.copy2(ENTRYPOINT, project_fullpath / "entrypoint.sh")
+    normalize_to_lf(project_fullpath / "entrypoint.sh")
     shutil.copy2(LAUNCH_JSON, project_fullpath / ".vscode" / "launch.json")
     for item in CONFIG_DIR.glob("*"):
         dst = project_fullpath / "config" / item.name
