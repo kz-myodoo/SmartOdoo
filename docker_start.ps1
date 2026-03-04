@@ -306,7 +306,7 @@ function create_project {
     run_compose "-f $PROJECT_FULLPATH\docker-compose.yml pull web"
     run_compose "-f $PROJECT_FULLPATH\docker-compose.yml pull db"
     run_compose "-f $PROJECT_FULLPATH\docker-compose.yml pull smtp4dev"
-    run_compose "-p $PROJECT_NAME -f $PROJECT_FULLPATH\docker-compose.yml up --detach"
+    run_compose "-p $PROJECT_NAME -f $PROJECT_FULLPATH\docker-compose.yml up --detach --build"
     standarize_env
 }
 
