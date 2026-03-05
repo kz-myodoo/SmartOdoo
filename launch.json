@@ -3,11 +3,12 @@
     "configurations": [
         {
             "name": "Debug Odoo",
-            "type": "python",
+            "type": "debugpy",
             "request": "attach",
-            "port": 8069,
-            "debugServer": 5858,
-            "host": "localhost",
+            "connect": {
+                "host": "localhost",
+                "port": 5858
+            },
             "pathMappings": [
                 {
                     "localRoot": "${workspaceFolder}/addons",
@@ -19,7 +20,7 @@
                 }
             ],
             "logToFile": true,
-            "justMyCode": false
-        }
+            "justMyCode": false,
+        },
     ]
 }

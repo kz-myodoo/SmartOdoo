@@ -4,6 +4,7 @@
 /secret/*
 /enterprise/*
 /upgrade-util/*
+/upgrade-util
 /odoo
 
 # Additional exceptions.
