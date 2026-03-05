@@ -13,8 +13,12 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+import pygubu
 
-class DockerStartUI(tk.Tk):
+from tools import resolve_project_path
+
+
+class SmartOdooUI(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("SmartOdoo: GUI")
@@ -26,7 +30,10 @@ class DockerStartUI(tk.Tk):
         self.bold_font.configure(weight="bold")
 
         self.script_path = Path(__file__).resolve().parent / "smartodoo.py"
+        self.view_path = Path(__file__).resolve().parent / "smartodoo_view.xml"
+
         self.process: subprocess.Popen[str] | None = None
+        self.is_process_running = False
         self.output_queue: queue.Queue[str] = queue.Queue()
         self.branch_fetch_after_id: str | None = None
         self.rebuild_fetch_after_id: str | None = None
@@ -34,7 +41,9 @@ class DockerStartUI(tk.Tk):
         self.last_rebuild_source_project = ""
 
         self._build_variables()
-        self._build_layout()
+        self._build_ui_from_xml()
+        self._connect_events()
+
         self._toggle_action_fields()
         self._load_odoo_versions_async()
         self._load_psql_versions_async()
@@ -56,117 +65,95 @@ class DockerStartUI(tk.Tk):
         self.rebuild_var = tk.StringVar()
         self.pip_var = tk.StringVar()
 
-    def _build_layout(self) -> None:
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
-
-        header = ttk.Frame(self, padding=12)
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
-
-        title = ttk.Label(header, text="SmartOdoo: GUI", font=("Segoe UI", 14, "bold"))
-        title.grid(row=0, column=0, sticky="w")
-
-        form = ttk.LabelFrame(self, text="Parameters", padding=12)
-        form.grid(row=1, column=0, sticky="nsew", padx=12)
-        for col in range(4):
-            form.columnconfigure(col, weight=1)
-
-        self.action_label = ttk.Label(form, text="Action")
-        self.action_label.grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        self.action_combo = ttk.Combobox(
-            form,
-            textvariable=self.action_var,
-            values=["start/create", "delete", "test", "rebuild", "install", "pip_install"],
-            state="readonly",
-        )
-        self.action_combo.grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        self.action_combo.bind("<<ComboboxSelected>>", lambda _event: self._toggle_action_fields())
-
-        self.odoo_label = ttk.Label(form, text="Odoo version")
-        self.odoo_label.grid(row=0, column=2, sticky="w", padx=4, pady=4)
-        self.odoo_combo = ttk.Combobox(form, textvariable=self.odoo_var, values=["19.0"], state="normal")
-        self.odoo_combo.grid(row=0, column=3, sticky="ew", padx=4, pady=4)
-
-        self.project_name_label = ttk.Label(form, text="Project name")
-        self.project_name_label.grid(row=1, column=0, sticky="w", padx=4, pady=4)
-        self.project_name_entry = ttk.Entry(form, textvariable=self.name_var)
-        self.project_name_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=4)
-
-        self.psql_label = ttk.Label(form, text="Postgres version")
-        self.psql_label.grid(row=1, column=2, sticky="w", padx=4, pady=4)
-        self.psql_combo = ttk.Combobox(form, textvariable=self.psql_var, values=["16"], state="normal")
-        self.psql_combo.grid(row=1, column=3, sticky="ew", padx=4, pady=4)
-
-        self.addons_label = ttk.Label(form, text="Addons URL")
-        self.addons_label.grid(row=2, column=0, sticky="w", padx=4, pady=4)
-        self.addons_entry = ttk.Entry(form, textvariable=self.addons_var)
-        self.addons_entry.grid(row=2, column=1, sticky="ew", padx=4, pady=4)
-
-        self.branch_label = ttk.Label(form, text="Addons branch")
-        self.branch_label.grid(row=2, column=2, sticky="w", padx=4, pady=4)
-        self.branch_combo = ttk.Combobox(form, textvariable=self.branch_var, values=[], state="normal")
-        self.branch_combo.grid(row=2, column=3, sticky="ew", padx=4, pady=4)
-
-        self.enterprise_check = ttk.Checkbutton(form, text="Enterprise", variable=self.enterprise_var)
-        self.enterprise_check.grid(row=3, column=0, sticky="w", padx=4, pady=4)
-        self.upgrade_check = ttk.Checkbutton(form, text="Upgrade mode", variable=self.upgrade_var)
-        self.upgrade_check.grid(row=3, column=1, sticky="w", padx=4, pady=4)
-
-        self.db_label = ttk.Label(form, text="DB")
-        self.db_entry = ttk.Entry(form, textvariable=self.db_var)
-        self.module_label = ttk.Label(form, text="Module")
-        self.module_entry = ttk.Entry(form, textvariable=self.module_var)
-        self.tags_label = ttk.Label(form, text="Tags")
-        self.tags_entry = ttk.Entry(form, textvariable=self.tags_var)
-        self.rebuild_label = ttk.Label(form, text="Container to rebuild")
-        self.rebuild_combo = ttk.Combobox(form, textvariable=self.rebuild_var, values=[], state="readonly")
-        self.pip_label = ttk.Label(form, text="Pip package")
-        self.pip_entry = ttk.Entry(form, textvariable=self.pip_var)
-
-        self.db_label.grid(row=4, column=0, sticky="w", padx=4, pady=4)
-        self.db_entry.grid(row=4, column=1, sticky="ew", padx=4, pady=4)
-        self.module_label.grid(row=4, column=2, sticky="w", padx=4, pady=4)
-        self.module_entry.grid(row=4, column=3, sticky="ew", padx=4, pady=4)
-
-        self.tags_label.grid(row=5, column=0, sticky="w", padx=4, pady=4)
-        self.tags_entry.grid(row=5, column=1, sticky="ew", padx=4, pady=4)
-        self.rebuild_label.grid(row=5, column=2, sticky="w", padx=4, pady=4)
-        self.rebuild_combo.grid(row=5, column=3, sticky="ew", padx=4, pady=4)
-
-        self.pip_label.grid(row=6, column=0, sticky="w", padx=4, pady=4)
-        self.pip_entry.grid(row=6, column=1, sticky="ew", padx=4, pady=4)
-
-        actions = ttk.Frame(self, padding=(12, 8, 12, 8))
-        actions.grid(row=2, column=0, sticky="ew")
-        actions.columnconfigure(0, weight=1)
-
         self.command_preview_var = tk.StringVar(value="Command: ")
-        self.command_preview_label = ttk.Label(actions, textvariable=self.command_preview_var, anchor="w")
-        self.command_preview_label.grid(row=0, column=0, sticky="ew")
-        self.command_preview_label.configure(wraplength=620)
 
-        buttons = ttk.Frame(actions)
-        buttons.grid(row=0, column=1, sticky="e")
-        self.run_btn = ttk.Button(buttons, text="Run", command=self._run)
-        self.run_btn.grid(row=0, column=0, padx=4, pady=2)
-        self.copy_btn = ttk.Button(buttons, text="Copy command", command=self._copy_command)
-        self.copy_btn.grid(row=0, column=1, padx=4, pady=2)
-        self.clear_btn = ttk.Button(buttons, text="Clear logs", command=self._clear_logs)
-        self.clear_btn.grid(row=1, column=0, padx=4, pady=2)
-        self.copy_logs_btn = ttk.Button(buttons, text="Copy logs", command=self._copy_logs)
-        self.copy_logs_btn.grid(row=1, column=1, padx=4, pady=2)
+    def _build_ui_from_xml(self) -> None:
+        if not self.view_path.exists():
+            raise FileNotFoundError(f"View file not found: {self.view_path}")
 
-        output_frame = ttk.LabelFrame(self, text="Logs", padding=8)
-        output_frame.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        output_frame.rowconfigure(0, weight=1)
-        output_frame.columnconfigure(0, weight=1)
+        self.builder = pygubu.Builder()
+        self.builder.add_from_file(str(self.view_path))
+        self.mainframe = self.builder.get_object("mainframe", self)
 
-        self.output_text = tk.Text(output_frame, wrap="word", height=18)
-        self.output_text.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(output_frame, orient="vertical", command=self.output_text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.output_text.configure(yscrollcommand=scrollbar.set)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.mainframe.columnconfigure(0, weight=1)
+        self.mainframe.rowconfigure(3, weight=1)
+
+        self.form = self.builder.get_object("form", self)
+        for col in range(4):
+            self.form.columnconfigure(col, weight=1)
+
+        self.actions = self.builder.get_object("actions", self)
+        self.actions.columnconfigure(0, weight=1)
+
+        self.output_frame = self.builder.get_object("output_frame", self)
+        self.output_frame.columnconfigure(0, weight=1)
+        self.output_frame.rowconfigure(0, weight=1)
+
+        self.action_label: ttk.Label = self.builder.get_object("action_label", self)
+        self.title_label: ttk.Label = self.builder.get_object("title_label", self)
+        self.action_combo: ttk.Combobox = self.builder.get_object("action_combo", self)
+        self.odoo_label: ttk.Label = self.builder.get_object("odoo_label", self)
+        self.odoo_combo: ttk.Combobox = self.builder.get_object("odoo_combo", self)
+        self.project_name_label: ttk.Label = self.builder.get_object("project_name_label", self)
+        self.project_name_entry: ttk.Entry = self.builder.get_object("project_name_entry", self)
+        self.psql_label: ttk.Label = self.builder.get_object("psql_label", self)
+        self.psql_combo: ttk.Combobox = self.builder.get_object("psql_combo", self)
+        self.addons_label: ttk.Label = self.builder.get_object("addons_label", self)
+        self.addons_entry: ttk.Entry = self.builder.get_object("addons_entry", self)
+        self.branch_label: ttk.Label = self.builder.get_object("branch_label", self)
+        self.branch_combo: ttk.Combobox = self.builder.get_object("branch_combo", self)
+        self.enterprise_check: ttk.Checkbutton = self.builder.get_object("enterprise_check", self)
+        self.upgrade_check: ttk.Checkbutton = self.builder.get_object("upgrade_check", self)
+
+        self.db_label: ttk.Label = self.builder.get_object("db_label", self)
+        self.db_entry: ttk.Entry = self.builder.get_object("db_entry", self)
+        self.module_label: ttk.Label = self.builder.get_object("module_label", self)
+        self.module_entry: ttk.Entry = self.builder.get_object("module_entry", self)
+        self.tags_label: ttk.Label = self.builder.get_object("tags_label", self)
+        self.tags_entry: ttk.Entry = self.builder.get_object("tags_entry", self)
+        self.rebuild_label: ttk.Label = self.builder.get_object("rebuild_label", self)
+        self.rebuild_combo: ttk.Combobox = self.builder.get_object("rebuild_combo", self)
+        self.pip_label: ttk.Label = self.builder.get_object("pip_label", self)
+        self.pip_entry: ttk.Entry = self.builder.get_object("pip_entry", self)
+
+        self.run_btn: ttk.Button = self.builder.get_object("run_btn", self)
+        self.copy_btn: ttk.Button = self.builder.get_object("copy_btn", self)
+        self.clear_btn: ttk.Button = self.builder.get_object("clear_btn", self)
+        self.copy_logs_btn: ttk.Button = self.builder.get_object("copy_logs_btn", self)
+
+        self.command_preview_label: ttk.Label = self.builder.get_object("command_preview_label", self)
+        self.output_text: tk.Text = self.builder.get_object("output_text", self)
+        self.logs_scroll: ttk.Scrollbar = self.builder.get_object("logs_scroll", self)
+
+        self.action_combo.configure(textvariable=self.action_var, values=[
+                                    "start/create", "delete", "test", "rebuild", "install", "pip_install"], state="readonly")
+        self.odoo_combo.configure(textvariable=self.odoo_var, values=["19.0"], state="normal")
+        self.project_name_entry.configure(textvariable=self.name_var)
+        self.psql_combo.configure(textvariable=self.psql_var, values=["16"], state="normal")
+        self.addons_entry.configure(textvariable=self.addons_var)
+        self.branch_combo.configure(textvariable=self.branch_var, values=[], state="normal")
+        self.enterprise_check.configure(variable=self.enterprise_var)
+        self.upgrade_check.configure(variable=self.upgrade_var)
+
+        self.db_entry.configure(textvariable=self.db_var)
+        self.module_entry.configure(textvariable=self.module_var)
+        self.tags_entry.configure(textvariable=self.tags_var)
+        self.rebuild_combo.configure(textvariable=self.rebuild_var, values=[], state="readonly")
+        self.pip_entry.configure(textvariable=self.pip_var)
+
+        self.command_preview_label.configure(textvariable=self.command_preview_var, wraplength=620)
+        self.title_label.configure(font=("Segoe UI", 14, "bold"))
+        self.logs_scroll.configure(command=self.output_text.yview)
+        self.output_text.configure(yscrollcommand=self.logs_scroll.set)
+
+    def _connect_events(self) -> None:
+        self.action_combo.bind("<<ComboboxSelected>>", lambda _event: self._toggle_action_fields())
+        self.run_btn.configure(command=self._run)
+        self.copy_btn.configure(command=self._copy_command)
+        self.clear_btn.configure(command=self._clear_logs)
+        self.copy_logs_btn.configure(command=self._copy_logs)
 
         for var in (
             self.name_var,
@@ -188,8 +175,6 @@ class DockerStartUI(tk.Tk):
         self.addons_var.trace_add("write", lambda *_args: self._schedule_addons_branch_refresh())
         self.name_var.trace_add("write", lambda *_args: self._schedule_rebuild_containers_refresh())
         self.action_var.trace_add("write", lambda *_args: self._schedule_rebuild_containers_refresh())
-
-        self._update_command_preview()
 
     def _toggle_action_fields(self) -> None:
         action = self.action_var.get()
@@ -222,8 +207,9 @@ class DockerStartUI(tk.Tk):
             self._schedule_rebuild_containers_refresh()
 
         self._update_command_preview()
+        self._refresh_run_button_state()
 
-    def _set_widget_visible(self, label: ttk.Label, entry: ttk.Entry, visible: bool) -> None:
+    def _set_widget_visible(self, label: ttk.Widget, entry: ttk.Widget, visible: bool) -> None:
         if visible:
             label.grid()
             entry.grid()
@@ -290,7 +276,7 @@ class DockerStartUI(tk.Tk):
         threading.Thread(target=self._fetch_rebuild_containers_worker, args=(project_name,), daemon=True).start()
 
     def _fetch_rebuild_containers_worker(self, project_name: str) -> None:
-        project_path = self._resolve_project_path(project_name)
+        project_path = resolve_project_path(project_name)
         compose_base = self._detect_compose_base()
         cmd = compose_base + ["config", "--services"]
         try:
@@ -320,57 +306,6 @@ class DockerStartUI(tk.Tk):
             return [docker_compose_path]
 
         raise RuntimeError("Neither 'docker compose' nor 'docker-compose' is available in PATH.")
-
-    def _resolve_project_path(self, project_name: str) -> Path:
-        documents_dir = self._detect_documents_dir()
-        candidates = [
-            documents_dir / "DockerProjects",
-            Path.home() / "Dokumenty" / "DockerProjects",
-            Path.home() / "Documents" / "DockerProjects",
-        ]
-        if os.name == "nt":
-            cwd_based = Path(str(Path.cwd()).replace("SmartOdoo", "DockerProjects"))
-            candidates = [cwd_based, documents_dir / "DockerProjects"]
-
-        unique_candidates: list[Path] = []
-        seen: set[str] = set()
-        for candidate in candidates:
-            key = str(candidate)
-            if key in seen:
-                continue
-            seen.add(key)
-            unique_candidates.append(candidate)
-
-        base_path = unique_candidates[0]
-        for candidate in unique_candidates:
-            if candidate.exists():
-                base_path = candidate
-                break
-        return base_path / project_name
-
-    def _detect_documents_dir(self) -> Path:
-        if os.name == "nt":
-            user_profile = Path(os.environ.get("USERPROFILE", str(Path.home())))
-            return user_profile / "Documents"
-
-        xdg_documents_dir = os.environ.get("XDG_DOCUMENTS_DIR")
-        if xdg_documents_dir:
-            expanded = xdg_documents_dir.replace("$HOME", str(Path.home()))
-            return Path(expanded).expanduser()
-
-        xdg_user_dir_cmd = shutil.which("xdg-user-dir")
-        if xdg_user_dir_cmd:
-            detected = subprocess.run([xdg_user_dir_cmd, "DOCUMENTS"], text=True, capture_output=True, check=False)
-            detected_path = detected.stdout.strip()
-            if detected.returncode == 0 and detected_path:
-                return Path(detected_path).expanduser()
-
-        for fallback_name in ["Documents", "Dokumenty"]:
-            fallback_dir = Path.home() / fallback_name
-            if fallback_dir.exists():
-                return fallback_dir
-
-        return Path.home() / "Documents"
 
     def _apply_rebuild_containers(self, project_name: str, containers: list[str]) -> None:
         if project_name != self.name_var.get().strip():
@@ -439,13 +374,8 @@ class DockerStartUI(tk.Tk):
         try:
             env = dict(os.environ)
             env["GIT_TERMINAL_PROMPT"] = "0"
-            result = subprocess.run(
-                ["git", "ls-remote", "--heads", repo_url],
-                text=True,
-                capture_output=True,
-                check=False,
-                env=env,
-            )
+            result = subprocess.run(["git", "ls-remote", "--heads", repo_url],
+                                    text=True, capture_output=True, check=False, env=env)
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
                 raise RuntimeError(stderr)
@@ -548,11 +478,13 @@ class DockerStartUI(tk.Tk):
                 cmd.extend(["-m", module])
             if tags:
                 cmd.extend(["--tags", tags])
+
         elif action == "rebuild":
             rebuild_target = self.rebuild_var.get().strip()
             if not rebuild_target:
                 raise ValueError("Action 'rebuild' requires 'Container to rebuild'.")
             cmd.extend(["-r", rebuild_target])
+
         elif action == "pip_install":
             pip_pkg = self.pip_var.get().strip()
             if not pip_pkg:
@@ -562,8 +494,37 @@ class DockerStartUI(tk.Tk):
         return cmd
 
     def _set_running_state(self, running: bool) -> None:
-        state = "disabled" if running else "normal"
-        self.run_btn.configure(state=state)
+        self.is_process_running = running
+        self._refresh_run_button_state()
+
+    def _required_fields_filled(self) -> bool:
+        action = self.action_var.get()
+        project_name = self.name_var.get().strip()
+        if not project_name:
+            return False
+
+        if action == "start/create":
+            return bool(self.odoo_var.get().strip() and self.psql_var.get().strip())
+
+        if action == "install":
+            return bool(self.db_var.get().strip() and self.module_var.get().strip())
+
+        if action == "test":
+            has_db = bool(self.db_var.get().strip())
+            has_target = bool(self.module_var.get().strip() or self.tags_var.get().strip())
+            return has_db and has_target
+
+        if action == "rebuild":
+            return bool(self.rebuild_var.get().strip())
+
+        if action == "pip_install":
+            return bool(self.pip_var.get().strip())
+
+        return True
+
+    def _refresh_run_button_state(self) -> None:
+        enabled = (not self.is_process_running) and self._required_fields_filled()
+        self.run_btn.configure(state="normal" if enabled else "disabled")
 
     def _load_odoo_versions_async(self) -> None:
         threading.Thread(target=self._load_odoo_versions_worker, daemon=True).start()
@@ -584,18 +545,9 @@ class DockerStartUI(tk.Tk):
             if not isinstance(tags, list):
                 raise ValueError("Invalid JSON response format.")
 
-            versions: list[str] = []
-            for tag in tags:
-                if not isinstance(tag, dict):
-                    continue
-                name = str(tag.get("name", "")).strip()
-                if name:
-                    versions.append(name)
-
-            unique_versions = list(dict.fromkeys(versions))
-            if not unique_versions:
-                unique_versions = ["19.0"]
-
+            versions = [str(tag.get("name", "")).strip() for tag in tags if isinstance(tag, dict)]
+            versions = [name for name in versions if name]
+            unique_versions = list(dict.fromkeys(versions)) or ["19.0"]
             self.after(0, lambda: self._apply_odoo_versions(unique_versions))
         except Exception as exc:
             self.after(0, lambda: self._on_odoo_versions_error(exc))
@@ -613,18 +565,9 @@ class DockerStartUI(tk.Tk):
             if not isinstance(tags, list):
                 raise ValueError("Invalid JSON response format.")
 
-            versions: list[str] = []
-            for tag in tags:
-                if not isinstance(tag, dict):
-                    continue
-                name = str(tag.get("name", "")).strip()
-                if name:
-                    versions.append(name)
-
-            unique_versions = list(dict.fromkeys(versions))
-            if not unique_versions:
-                unique_versions = ["16"]
-
+            versions = [str(tag.get("name", "")).strip() for tag in tags if isinstance(tag, dict)]
+            versions = [name for name in versions if name]
+            unique_versions = list(dict.fromkeys(versions)) or ["16"]
             self.after(0, lambda: self._apply_psql_versions(unique_versions))
         except Exception as exc:
             self.after(0, lambda: self._on_psql_versions_error(exc))
@@ -632,10 +575,7 @@ class DockerStartUI(tk.Tk):
     def _apply_odoo_versions(self, versions: list[str]) -> None:
         self.odoo_combo.configure(values=versions)
         current = self.odoo_var.get().strip()
-        if current in versions:
-            self.odoo_var.set(current)
-        else:
-            self.odoo_var.set(versions[0])
+        self.odoo_var.set(current if current in versions else versions[0])
         self._append_output(f"Loaded Odoo versions: {', '.join(versions[:10])}\n")
 
     def _on_odoo_versions_error(self, error: Exception) -> None:
@@ -646,10 +586,7 @@ class DockerStartUI(tk.Tk):
     def _apply_psql_versions(self, versions: list[str]) -> None:
         self.psql_combo.configure(values=versions)
         current = self.psql_var.get().strip()
-        if current in versions:
-            self.psql_var.set(current)
-        else:
-            self.psql_var.set(versions[0])
+        self.psql_var.set(current if current in versions else versions[0])
         self._append_output(f"Loaded Postgres versions: {', '.join(versions[:10])}\n")
 
     def _on_psql_versions_error(self, error: Exception) -> None:
@@ -665,6 +602,8 @@ class DockerStartUI(tk.Tk):
             self.command_preview_var.set(f"Command: {rendered}")
         except ValueError as exc:
             self.command_preview_var.set(f"Command: validation error ({exc})")
+        finally:
+            self._refresh_run_button_state()
 
     def _build_rendered_command(self) -> str:
         cmd = self._build_command(help_only=False)
@@ -767,7 +706,7 @@ class DockerStartUI(tk.Tk):
 
 
 def main() -> None:
-    app = DockerStartUI()
+    app = SmartOdooUI()
     app.mainloop()
 
 

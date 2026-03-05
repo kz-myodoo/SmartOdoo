@@ -13,6 +13,8 @@ from urllib.request import urlopen
 from pathlib import Path
 from typing import Optional
 
+from tools import resolve_projects_base
+
 
 ROOT = Path(__file__).resolve().parent
 ENV_FILE = ROOT / ".env"
@@ -51,45 +53,6 @@ def run(cmd: list[str], cwd: Optional[Path] = None, check: bool = True, capture_
         check=check,
         capture_output=capture_output,
     )
-
-
-def unique_paths(paths: list[Path]) -> list[Path]:
-    """Return paths without duplicates while preserving original order."""
-    seen: set[str] = set()
-    result: list[Path] = []
-    for path in paths:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(path)
-    return result
-
-
-def detect_documents_dir() -> Path:
-    """Detect user Documents directory in a locale-independent way."""
-    if IS_WINDOWS:
-        user_profile = Path(os.environ.get("USERPROFILE", str(Path.home())))
-        return user_profile / "Documents"
-
-    xdg_documents_dir = os.environ.get("XDG_DOCUMENTS_DIR")
-    if xdg_documents_dir:
-        expanded = xdg_documents_dir.replace("$HOME", str(Path.home()))
-        return Path(expanded).expanduser()
-
-    xdg_user_dir_cmd = shutil.which("xdg-user-dir")
-    if xdg_user_dir_cmd:
-        detected = run([xdg_user_dir_cmd, "DOCUMENTS"], capture_output=True, check=False)
-        detected_path = detected.stdout.strip()
-        if detected.returncode == 0 and detected_path:
-            return Path(detected_path).expanduser()
-
-    for fallback_name in ["Documents", "Dokumenty"]:
-        fallback_dir = Path.home() / fallback_name
-        if fallback_dir.exists():
-            return fallback_dir
-
-    return Path.home() / "Documents"
 
 
 def detect_compose_base() -> list[str]:
@@ -667,21 +630,7 @@ def main() -> None:
 
     addons_clone_url = addons_link_compose(args.addons) if args.addons else None
 
-    documents_dir = detect_documents_dir()
-    candidates = [documents_dir / "DockerProjects", PROJECTS_DIR, Path.home() / "Documents" / "DockerProjects",
-                  Path.home() / "Dokumenty" / "DockerProjects"]
-    if IS_WINDOWS:
-        cwd_based = Path(str(Path.cwd()).replace("SmartOdoo", "DockerProjects"))
-        candidates = [cwd_based, documents_dir / "DockerProjects", PROJECTS_DIR]
-
-    candidates = unique_paths(candidates)
-
-    project_base = candidates[0]
-    for candidate in candidates:
-        if candidate.exists():
-            project_base = candidate
-            break
-    project_base.mkdir(parents=True, exist_ok=True)
+    project_base = resolve_projects_base(additional_candidates=[PROJECTS_DIR], ensure_exists=True)
 
     project_fullpath = project_base / args.name
     if project_fullpath.exists():
