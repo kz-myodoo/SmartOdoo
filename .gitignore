@@ -2,6 +2,8 @@
 
 /secret
 /secret/*
+/working
+/working/*
 /enterprise/*
 /upgrade-util/*
 /upgrade-util
