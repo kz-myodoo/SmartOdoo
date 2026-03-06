@@ -180,12 +180,37 @@ class OdooCliOrchestrator:
             shutil.copytree(config_src, config_dst)
 
 
+from rich.panel import Panel
+
+class RichHelpParser(argparse.ArgumentParser):
+    def print_help(self, file=None):
+        console.print(Panel.fit(
+            "[bold cyan]SmartOdoo CLI[/] — system zwinnego budowania środowisk Odoo w terminalu.\n\n"
+            "💡 [yellow]WSKAZÓWKA:[/] Jeśli pominiesz flagi i uruchomisz sam skrypt `python smartodoo.py`,\n"
+            "uruchomi się hybrydowy kreator dający dostęp do [magenta]Premium GUI (Dark Mode)[/]!",
+            title="✨ Witaj w Systemie", border_style="cyan"
+        ))
+        
+        table = Table(title="📖 Spis Treści (Dostępne Komendy)", show_header=True, header_style="bold magenta")
+        table.add_column("Komenda", style="cyan", justify="right")
+        table.add_column("Opis akcji do wykonania", style="white")
+        
+        table.add_row("create", "Utwórz nowy projekt Odoo (pozwala sprecyzować Odoo, Git, PostgreSQL)")
+        table.add_row("delete", "Zatrzymaj dockera i uwolnij zasoby dyskowe projektu")
+        table.add_row("test", "Uruchom testy asercyjne dla załadowanego środowiska")
+        table.add_row("list", "Wylistuj tabelę swoich obecnie zbudowanych projektów")
+        table.add_row("tags", "Asynchronicznie odpytaj DockerHub o najnowsze wersje dla flagi create")
+        
+        console.print(table)
+        console.print("\n[dim]Globalne wejścia:[/]")
+        console.print("  [cyan]-h, --help[/]    Pokazuje ten interfejs pomocy i wychodzi \n")
+        console.print("[bold]📚 Przykłady bezpośrednich wywołań w terminalu:[/]")
+        console.print("  [green]so create -n MójSklep -o 16.0[/]")
+        console.print("  [green]python smartodoo.py tags[/]\n")
+
 # ─── CLI Parser z subcommands ──────────────────────────────────────────
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="so",
-        description="SmartOdoo CLI — szybkie środowiska Odoo w terminalu",
-    )
+    parser = RichHelpParser(prog="so")
     sub = parser.add_subparsers(dest="command", help="Dostępne komendy")
 
     # so create -n MyProject

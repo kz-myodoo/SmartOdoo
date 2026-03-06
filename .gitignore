@@ -141,4 +141,4 @@ dmypy.json
 .pyre/
 
 # Visual project settings
-.vscode/
+.vscode/\n# AI and Team Engine (Local only)\n/TeamEngine/\n/.agents/\n/docs/blueprint/
