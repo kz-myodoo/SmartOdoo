@@ -62,6 +62,36 @@ class SmartOdooApp(ctk.CTk):
         self.btn_create = ctk.CTkButton(self, text="🚀 Uruchom Budowanie", font=ctk.CTkFont(size=14, weight="bold"), height=40, command=self.on_create)
         self.btn_create.pack(pady=20, padx=40, fill="x")
 
+        # Przycisk POMOC (Helper dla the UX)
+        self.btn_help = ctk.CTkButton(self, text="❔ Instrukcja GUI", width=120, fg_color="transparent", border_width=1, text_color="gray", command=self.show_help)
+        self.btn_help.pack(side="bottom", pady=10)
+
+    def show_help(self):
+        help_window = ctk.CTkToplevel(self)
+        help_window.title("Instrukcja Obsługi SmartOdoo GUI")
+        help_window.geometry("500x350")
+        help_window.resizable(False, False)
+        
+        # Otwórz the okno na samym the przodzie the aplikacji
+        help_window.attributes("-topmost", True)
+        help_window.grab_set()
+
+        help_text = (
+            "🚀 SmartOdoo Premium Builder - Pomoc\n\n"
+            "Interfejs ten generuje dla The Ciebie dedykowane pliki .env oraz the docker-compose.yml.\n\n"
+            "Kroki:\n"
+            "1. Nazwa Folderu - To the ścieżka The lokalna (np. SklepZoologiczny), The w niej będą żyły The bazy Odoo.\n"
+            "2. Wersja Odoo - Opcje (15-19) zostaną the wciągnięte z DockerHuba the w biegu ułamka the sekundy.\n"
+            "3. Flaga 'Pobierz Enterprise' - Zaciąga the komercyjne kody Enterprise the poprzez mechanizm GITA The w podfolder.\n\n"
+            "💡 Wszystko odbywa się bezpiecznie pod maską klasy The Dependency Injection. The Żaden the proces na głównym oknie the nie zamrozi the widoku."
+        )
+
+        label = ctk.CTkLabel(help_window, text=help_text, justify="left", wraplength=450)
+        label.pack(padx=20, pady=20)
+        
+        btn_close = ctk.CTkButton(help_window, text="Zrozumiałem", command=help_window.destroy)
+        btn_close.pack(pady=10)
+
     def on_create(self):
         project_name = self.entry_name.get().strip()
         if not project_name:

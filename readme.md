@@ -34,7 +34,19 @@ cd SmartOdoo
 pip install -e .
 ```
 
-### 🎮 Jak korzystać z aplikacji (Subcommandy CLI)
+### 🎮 Interaktywne GUI (Wbudowany Helper) - Nowość!
+Zamiast korzystać z dziesiątek flag The CLI, SmartOdoo posiada wbudowane eleganckie the środowisko Dark Mode wywoływane w prosty sposób the przy użyciu biblioteki CustomTkinter.
+
+Jak uruchomić: wpisz gołe polecenie the bazy bez żadnych The flag w terminalu:
+```bash
+python smartodoo.py
+```
+Program wyświetli na the ekranie pole wyboru The Trybu the i jeśli wskażesz [2], pokaże The Ci estetyczne opcje the takie jak wpisanie z palca Nazwy Projektu the i the wyklikanie wersji the PostgreSQL.
+💡 The W prawym the dolnym The rogu aplikacji The znajduje się dedykowany przycisk **"❔ Instrukcja GUI"**, który podpowie nowym użytkownikom The Krok po the Kroku the co oznaczają suwaki np. "Pobierz the Enterprise".
+
+---
+
+### 💻 Jak korzystać z aplikacji w konsoli (Subcommandy The CLI)
 
 Interfejs użytkownika do komunikacji został uproszczony pod parser `argparse` z kolorowymi powiadomieniami od biblioteki `rich`. Wykorzystaj program za pomocą aliasu startowego `python smartodoo.py` lub docelowo `so`.
 
