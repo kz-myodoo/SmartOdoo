@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -11,11 +12,15 @@ import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import pygubu
+from tools import load_platform_paths
 
-from tools import resolve_project_path
+
+ROOT = Path(__file__).resolve().parent
+PLATFORM_PATHS = load_platform_paths(root_dir=ROOT)
+PROJECTS_DIR = PLATFORM_PATHS["PROJECTS_DIR"]
 
 
 class SmartOdooUI(tk.Tk):
@@ -31,6 +36,9 @@ class SmartOdooUI(tk.Tk):
 
         self.script_path = Path(__file__).resolve().parent / "smartodoo.py"
         self.view_path = Path(__file__).resolve().parent / "smartodoo_view.xml"
+        self.config_json_path = ROOT / "config.json"
+        self.odoo_conf_path = ROOT / "config" / "odoo.conf"
+        self.projects_dir = PROJECTS_DIR
 
         self.process: subprocess.Popen[str] | None = None
         self.is_process_running = False
@@ -39,14 +47,29 @@ class SmartOdooUI(tk.Tk):
         self.rebuild_fetch_after_id: str | None = None
         self.last_branch_source_url = ""
         self.last_rebuild_source_project = ""
+        self._prompt_tail = ""
+        self._awaiting_secret_input = False
+        self._pending_secret_value: str | None = None
 
         self._build_variables()
         self._build_ui_from_xml()
+        self._build_menu()
         self._connect_events()
 
         self._toggle_action_fields()
-        self._load_odoo_versions_async()
-        self._load_psql_versions_async()
+        self._refresh_project_names()
+        self._load_docker_image_tags_async(
+            list_flag="--list_odoo_tags",
+            fallback="19.0",
+            apply_callback=self._apply_odoo_versions,
+            error_callback=self._on_odoo_versions_error,
+        )
+        self._load_docker_image_tags_async(
+            list_flag="--list_psql_tags",
+            fallback="16",
+            apply_callback=self._apply_psql_versions,
+            error_callback=self._on_psql_versions_error,
+        )
         self.after(120, self._drain_output)
 
     def _build_variables(self) -> None:
@@ -55,7 +78,7 @@ class SmartOdooUI(tk.Tk):
         self.psql_var = tk.StringVar(value="16")
         self.addons_var = tk.StringVar()
         self.branch_var = tk.StringVar()
-        self.enterprise_var = tk.BooleanVar(value=False)
+        self.enterprise_var = tk.BooleanVar(value=True)
         self.upgrade_var = tk.BooleanVar(value=False)
 
         self.action_var = tk.StringVar(value="start/create")
@@ -97,7 +120,7 @@ class SmartOdooUI(tk.Tk):
         self.odoo_label: ttk.Label = self.builder.get_object("odoo_label", self)
         self.odoo_combo: ttk.Combobox = self.builder.get_object("odoo_combo", self)
         self.project_name_label: ttk.Label = self.builder.get_object("project_name_label", self)
-        self.project_name_entry: ttk.Entry = self.builder.get_object("project_name_entry", self)
+        self.project_name_entry: ttk.Combobox = self.builder.get_object("project_name_entry", self)
         self.psql_label: ttk.Label = self.builder.get_object("psql_label", self)
         self.psql_combo: ttk.Combobox = self.builder.get_object("psql_combo", self)
         self.addons_label: ttk.Label = self.builder.get_object("addons_label", self)
@@ -130,7 +153,8 @@ class SmartOdooUI(tk.Tk):
         self.action_combo.configure(textvariable=self.action_var, values=[
                                     "start/create", "delete", "test", "rebuild", "install", "pip_install"], state="readonly")
         self.odoo_combo.configure(textvariable=self.odoo_var, values=["19.0"], state="normal")
-        self.project_name_entry.configure(textvariable=self.name_var)
+        self.project_name_entry.configure(textvariable=self.name_var, values=[], state="normal",
+                                          postcommand=self._refresh_project_names)
         self.psql_combo.configure(textvariable=self.psql_var, values=["16"], state="normal")
         self.addons_entry.configure(textvariable=self.addons_var)
         self.branch_combo.configure(textvariable=self.branch_var, values=[], state="normal")
@@ -147,6 +171,38 @@ class SmartOdooUI(tk.Tk):
         self.title_label.configure(font=("Segoe UI", 14, "bold"))
         self.logs_scroll.configure(command=self.output_text.yview)
         self.output_text.configure(yscrollcommand=self.logs_scroll.set)
+
+    def _build_menu(self) -> None:
+        menubar = tk.Menu(self)
+        settings_menu = tk.Menu(menubar, tearoff=False)
+        settings_menu.add_command(
+            label="config.json",
+            command=lambda: self._open_settings_file(self.config_json_path),
+        )
+        settings_menu.add_command(
+            label="odoo.conf",
+            command=lambda: self._open_settings_file(self.odoo_conf_path),
+        )
+        menubar.add_cascade(label="Settings", menu=settings_menu)
+        self.config(menu=menubar)
+
+    def _open_settings_file(self, file_path: Path) -> None:
+        if not file_path.exists():
+            messagebox.showerror("File missing", f"Not found: {file_path}")
+            return
+
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["cmd", "/c", "start", "", str(file_path)])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(file_path)])
+            else:
+                xdg_open = shutil.which("xdg-open")
+                if not xdg_open:
+                    raise RuntimeError("'xdg-open' is not available in PATH.")
+                subprocess.Popen([xdg_open, str(file_path)])
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            messagebox.showerror("Open file failed", f"Cannot open file: {file_path}\n\n{exc}")
 
     def _connect_events(self) -> None:
         self.action_combo.bind("<<ComboboxSelected>>", lambda _event: self._toggle_action_fields())
@@ -265,6 +321,24 @@ class SmartOdooUI(tk.Tk):
 
         self.rebuild_fetch_after_id = self.after(350, self._refresh_rebuild_containers_async)
 
+    def _refresh_project_names(self) -> None:
+        project_names = self._list_existing_projects()
+        current = self.name_var.get().strip()
+        self.project_name_entry.configure(values=project_names)
+        if current and current in project_names:
+            self.name_var.set(current)
+
+    def _list_existing_projects(self) -> list[str]:
+        base_dir = self.projects_dir
+        if not base_dir.exists() or not base_dir.is_dir():
+            return []
+
+        return sorted(
+            item.name
+            for item in base_dir.iterdir()
+            if item.is_dir() and not item.name.startswith(".")
+        )
+
     def _refresh_rebuild_containers_async(self) -> None:
         self.rebuild_fetch_after_id = None
         project_name = self.name_var.get().strip()
@@ -276,7 +350,7 @@ class SmartOdooUI(tk.Tk):
         threading.Thread(target=self._fetch_rebuild_containers_worker, args=(project_name,), daemon=True).start()
 
     def _fetch_rebuild_containers_worker(self, project_name: str) -> None:
-        project_path = resolve_project_path(project_name)
+        project_path = self.projects_dir / project_name
         compose_base = self._detect_compose_base()
         cmd = compose_base + ["config", "--services"]
         try:
@@ -526,15 +600,28 @@ class SmartOdooUI(tk.Tk):
         enabled = (not self.is_process_running) and self._required_fields_filled()
         self.run_btn.configure(state="normal" if enabled else "disabled")
 
-    def _load_odoo_versions_async(self) -> None:
-        threading.Thread(target=self._load_odoo_versions_worker, daemon=True).start()
+    def _load_docker_image_tags_async(
+        self,
+        list_flag: str,
+        fallback: str,
+        apply_callback,
+        error_callback,
+    ) -> None:
+        threading.Thread(
+            target=self._load_docker_image_tags,
+            args=(list_flag, fallback, apply_callback, error_callback),
+            daemon=True,
+        ).start()
 
-    def _load_psql_versions_async(self) -> None:
-        threading.Thread(target=self._load_psql_versions_worker, daemon=True).start()
-
-    def _load_odoo_versions_worker(self) -> None:
+    def _load_docker_image_tags(
+        self,
+        list_flag: str,
+        fallback: str,
+        apply_callback,
+        error_callback,
+    ) -> None:
         python_executable = sys.executable or "python"
-        cmd = [python_executable, str(self.script_path), "--list_odoo_tags"]
+        cmd = [python_executable, str(self.script_path), list_flag]
         try:
             result = subprocess.run(cmd, text=True, capture_output=True, check=False)
             if result.returncode != 0:
@@ -547,30 +634,10 @@ class SmartOdooUI(tk.Tk):
 
             versions = [str(tag.get("name", "")).strip() for tag in tags if isinstance(tag, dict)]
             versions = [name for name in versions if name]
-            unique_versions = list(dict.fromkeys(versions)) or ["19.0"]
-            self.after(0, lambda: self._apply_odoo_versions(unique_versions))
+            unique_versions = list(dict.fromkeys(versions)) or [fallback]
+            self.after(0, lambda: apply_callback(unique_versions))
         except Exception as exc:
-            self.after(0, lambda: self._on_odoo_versions_error(exc))
-
-    def _load_psql_versions_worker(self) -> None:
-        python_executable = sys.executable or "python"
-        cmd = [python_executable, str(self.script_path), "--list_psql_tags"]
-        try:
-            result = subprocess.run(cmd, text=True, capture_output=True, check=False)
-            if result.returncode != 0:
-                stderr = result.stderr.strip() if result.stderr else "no details"
-                raise RuntimeError(f"{stderr}")
-
-            tags = json.loads(result.stdout)
-            if not isinstance(tags, list):
-                raise ValueError("Invalid JSON response format.")
-
-            versions = [str(tag.get("name", "")).strip() for tag in tags if isinstance(tag, dict)]
-            versions = [name for name in versions if name]
-            unique_versions = list(dict.fromkeys(versions)) or ["16"]
-            self.after(0, lambda: self._apply_psql_versions(unique_versions))
-        except Exception as exc:
-            self.after(0, lambda: self._on_psql_versions_error(exc))
+            self.after(0, lambda: error_callback(exc))
 
     def _apply_odoo_versions(self, versions: list[str]) -> None:
         self.odoo_combo.configure(values=versions)
@@ -660,10 +727,17 @@ class SmartOdooUI(tk.Tk):
 
     def _spawn_process(self, cmd: list[str]) -> None:
         self._set_running_state(True)
+        self._prompt_tail = ""
+        self._awaiting_secret_input = False
+        self._pending_secret_value = None
+        child_env = dict(os.environ)
+        child_env["SMARTODOO_ALLOW_STDIN_PROMPTS"] = "1"
         self.process = subprocess.Popen(
             cmd,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=child_env,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -676,8 +750,11 @@ class SmartOdooUI(tk.Tk):
         if not self.process or not self.process.stdout:
             return
 
-        for line in self.process.stdout:
-            self.output_queue.put(line)
+        while True:
+            chunk = self.process.stdout.read(1)
+            if chunk == "":
+                break
+            self.output_queue.put(chunk)
 
         return_code = self.process.wait()
         self.output_queue.put(f"\n=== EXIT CODE: {return_code} ===\n")
@@ -700,6 +777,53 @@ class SmartOdooUI(tk.Tk):
     def _append_output(self, text: str) -> None:
         self.output_text.insert("end", text)
         self.output_text.see("end")
+        self._detect_secret_prompt(text)
+
+    def _detect_secret_prompt(self, text: str) -> None:
+        self._prompt_tail = (self._prompt_tail + text)[-300:]
+
+        if self._awaiting_secret_input:
+            return
+
+        match = re.search(r"(Enter [^:\n]+:|Confirm [^:\n]+:)\s*$", self._prompt_tail)
+        if not match:
+            return
+
+        prompt_text = match.group(1)
+        self._awaiting_secret_input = True
+        self.after(0, lambda: self._request_secret_input(prompt_text))
+
+    def _request_secret_input(self, prompt_text: str) -> None:
+        if not self.process or self.process.poll() is not None or not self.process.stdin:
+            self._awaiting_secret_input = False
+            return
+
+        value = self._pending_secret_value
+        is_confirm_prompt = prompt_text.startswith("Confirm ")
+
+        if value is None or not is_confirm_prompt:
+            value = simpledialog.askstring("Secret required", prompt_text, parent=self, show="*")
+
+        if value is not None and not is_confirm_prompt:
+            self._pending_secret_value = value
+
+        if value is None:
+            self._append_output("\nSecret entry canceled. Stopping process.\n")
+            self.process.terminate()
+            self._awaiting_secret_input = False
+            return
+
+        try:
+            self.process.stdin.write(value + "\n")
+            self.process.stdin.flush()
+        except Exception as exc:
+            self._append_output(f"\nFailed to pass secret input to process: {exc}\n")
+            self.process.terminate()
+        finally:
+            if is_confirm_prompt:
+                self._pending_secret_value = None
+            self._awaiting_secret_input = False
+            self._prompt_tail = ""
 
     def _clear_logs(self) -> None:
         self.output_text.delete("1.0", "end")

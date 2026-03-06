@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -13,8 +12,7 @@ from urllib.request import urlopen
 from pathlib import Path
 from typing import Optional
 
-from tools import resolve_projects_base
-
+from tools import load_platform_paths
 
 ROOT = Path(__file__).resolve().parent
 ENV_FILE = ROOT / ".env"
@@ -25,23 +23,28 @@ DOCKER_COMPOSE = ROOT / "docker-compose.yml"
 ENTRYPOINT = ROOT / "entrypoint.sh"
 LAUNCH_JSON = ROOT / "launch.json"
 ENCPASS = ROOT / "encpass.sh"
+ENCPASS_BUCKET = "smartodoo"
 
 
 ODOO_VER = "19.0"
 PSQL_VER = "16"
 ODOO_REVISION = ""
-PROJECTS_DIR = Path.home() / "Dokumenty" / "DockerProjects"
-ENTERPRISE_LOCATION = ROOT / "enterprise"
-UPGRADE_UTIL_LOCATION = ROOT / "upgrade-util"
 ODOO_GITHUB_NAME = "odoo"
 ODOO_ENTERPRISE_REPOSITORY = "enterprise"
 UPGRADE_UTIL_REPOSITORY = "git@github.com:odoo/upgrade-util.git"
 IS_WINDOWS = os.name == "nt"
+ALLOW_STDIN_PROMPTS_ENV = "SMARTODOO_ALLOW_STDIN_PROMPTS"
 
 
 def eprint(msg: str) -> None:
     """Print a message to stderr."""
     print(msg, file=sys.stderr)
+
+
+PLATFORM_PATHS = load_platform_paths(root_dir=ROOT)
+PROJECTS_DIR = PLATFORM_PATHS["PROJECTS_DIR"]
+ENTERPRISE_LOCATION = PLATFORM_PATHS["ENTERPRISE_LOCATION"]
+UPGRADE_UTIL_LOCATION = PLATFORM_PATHS["UPGRADE_UTIL_LOCATION"]
 
 
 def run(cmd: list[str], cwd: Optional[Path] = None, check: bool = True, capture_output: bool = False) -> subprocess.CompletedProcess:
@@ -178,18 +181,79 @@ def get_secret(secret_name: str) -> str:
     """Resolve a secret from environment variables or encpass."""
     env_key = secret_name.upper()
     env_value = os.getenv(env_key)
-    if env_value:
-        return env_value
 
     bash_path = shutil.which("bash")
     if not IS_WINDOWS and ENCPASS.exists() and bash_path:
-        cmd = f"source {shlex.quote(str(ENCPASS))} && get_secret {shlex.quote(secret_name)}"
-        result = run([bash_path, "-lc", cmd], capture_output=True, check=False)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"Failed to read secret: {secret_name}")
-        value = result.stdout.strip()
-        if value:
-            return value
+        show_result = subprocess.run(
+            [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if show_result.returncode == 0:
+            value = show_result.stdout.strip()
+            if value and value != "**Locked**":
+                return value
+
+        allow_stdin_prompts = os.getenv(ALLOW_STDIN_PROMPTS_ENV) == "1"
+        if sys.stdin.isatty() or allow_stdin_prompts:
+            print(f"Secret '{secret_name}' not found in bucket '{ENCPASS_BUCKET}'.")
+            print("Adding secret interactively...")
+            add_result = subprocess.run(
+                [str(ENCPASS), "add", "-f", ENCPASS_BUCKET, secret_name],
+                text=True,
+                check=False,
+            )
+            verify_result = subprocess.run(
+                [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            value = verify_result.stdout.strip()
+            if verify_result.returncode == 0 and value and value != "**Locked**":
+                return value
+
+            raise RuntimeError(
+                f"Failed to add secret '{secret_name}' to bucket '{ENCPASS_BUCKET}' "
+                f"(encpass add exit code: {add_result.returncode})."
+            )
+
+        if env_value:
+            add_env = dict(os.environ)
+            add_env["ENCPASS_SECRET_INPUT"] = env_value
+            add_env["ENCPASS_CSECRET_INPUT"] = env_value
+
+            add_result = subprocess.run(
+                [str(ENCPASS), "add", "-f", ENCPASS_BUCKET, secret_name],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=add_env,
+                stdin=subprocess.DEVNULL,
+            )
+            if add_result.returncode == 0:
+                verify_result = subprocess.run(
+                    [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                value = verify_result.stdout.strip()
+                if verify_result.returncode == 0 and value and value != "**Locked**":
+                    return value
+
+            return env_value
+
+        error_details = show_result.stderr.strip() or "no details"
+        raise RuntimeError(
+            f"Missing secret '{secret_name}' in bucket '{ENCPASS_BUCKET}'. "
+            f"Interactive add requires terminal input (TTY) or {ALLOW_STDIN_PROMPTS_ENV}=1. "
+            f"Details: {error_details}"
+        )
+
+    if env_value:
+        return env_value
 
     raise RuntimeError(
         f"Missing secret '{secret_name}'. Set env var '{env_key}' or configure encpass.sh (Linux/macOS)."
@@ -507,11 +571,31 @@ def copy_required_files(project_fullpath: Path) -> None:
             shutil.copy2(item, dst)
 
 
+def adjust_project_odoo_conf(project_fullpath: Path, install_enterprise_modules: bool) -> None:
+    """Adjust copied odoo.conf based on enterprise installation mode."""
+    conf_path = project_fullpath / "config" / "odoo.conf"
+    if install_enterprise_modules or not conf_path.exists():
+        return
+
+    content = read_text(conf_path)
+    pattern = r"^(addons_path\s*=\s*)(.+)$"
+
+    def replace_addons_path(match: re.Match) -> str:
+        prefix = match.group(1)
+        paths = [part.strip() for part in match.group(2).split(",") if part.strip()]
+        filtered = [path for path in paths if path != "/mnt/enterprise"]
+        return f"{prefix}{','.join(filtered)}"
+
+    updated = re.sub(pattern, replace_addons_path, content, flags=re.MULTILINE)
+    write_text(conf_path, updated)
+
+
 def create_project(args: argparse.Namespace, project_fullpath: Path, addons_clone_url: Optional[str]) -> None:
     """Initialize and start a new Docker project workspace."""
     print("CREATE PROJECT")
     customize_env(args.name, project_fullpath, args.odoo, args.psql)
     copy_required_files(project_fullpath)
+    adjust_project_odoo_conf(project_fullpath, args.enterprise)
     clone_addons(project_fullpath, addons_clone_url, args.branch)
     clone_enterprise(args.odoo, args.enterprise)
     get_upgrade_util()
@@ -630,7 +714,8 @@ def main() -> None:
 
     addons_clone_url = addons_link_compose(args.addons) if args.addons else None
 
-    project_base = resolve_projects_base(additional_candidates=[PROJECTS_DIR], ensure_exists=True)
+    project_base = PROJECTS_DIR
+    project_base.mkdir(parents=True, exist_ok=True)
 
     project_fullpath = project_base / args.name
     if project_fullpath.exists():

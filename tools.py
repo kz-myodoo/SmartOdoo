@@ -1,82 +1,54 @@
 from __future__ import annotations
 
+import json
 import os
-import shutil
-import subprocess
 from pathlib import Path
-from typing import Iterable
+from typing import TypedDict
 
 
-def unique_paths(paths: Iterable[Path]) -> list[Path]:
-    """Return paths without duplicates while preserving original order."""
-    seen: set[str] = set()
-    result: list[Path] = []
-    for path in paths:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(path)
-    return result
+class PlatformPaths(TypedDict):
+    PROJECTS_DIR: Path
+    ENTERPRISE_LOCATION: Path
+    UPGRADE_UTIL_LOCATION: Path
 
 
-def detect_documents_dir() -> Path:
-    """Detect user Documents directory in a locale-independent way."""
-    if os.name == "nt":
-        user_profile = Path(os.environ.get("USERPROFILE", str(Path.home())))
-        return user_profile / "Documents"
-
-    xdg_documents_dir = os.environ.get("XDG_DOCUMENTS_DIR")
-    if xdg_documents_dir:
-        expanded = xdg_documents_dir.replace("$HOME", str(Path.home()))
-        return Path(expanded).expanduser()
-
-    xdg_user_dir_cmd = shutil.which("xdg-user-dir")
-    if xdg_user_dir_cmd:
-        detected = subprocess.run([xdg_user_dir_cmd, "DOCUMENTS"], text=True, capture_output=True, check=False)
-        detected_path = detected.stdout.strip()
-        if detected.returncode == 0 and detected_path:
-            return Path(detected_path).expanduser()
-
-    for fallback_name in ["Documents", "Dokumenty"]:
-        fallback_dir = Path.home() / fallback_name
-        if fallback_dir.exists():
-            return fallback_dir
-
-    return Path.home() / "Documents"
+def resolve_config_path(raw_value: str, *, base_dir: Path) -> Path:
+    """Resolve configured path with env/user expansion and relative support."""
+    expanded = os.path.expanduser(os.path.expandvars(raw_value.strip()))
+    candidate = Path(expanded)
+    if candidate.is_absolute():
+        return candidate
+    return (base_dir / candidate).resolve()
 
 
-def resolve_projects_base(*, additional_candidates: Iterable[Path] | None = None, ensure_exists: bool = False) -> Path:
-    """Resolve the best base path for DockerProjects across platforms."""
-    documents_dir = detect_documents_dir()
-    candidates: list[Path] = [
-        documents_dir / "DockerProjects",
-        Path.home() / "Dokumenty" / "DockerProjects",
-        Path.home() / "Documents" / "DockerProjects",
-    ]
+def load_platform_paths(*, root_dir: Path) -> PlatformPaths:
+    """Load required platform-specific paths from config.json in root_dir."""
+    config_path = root_dir / "config.json"
+    if not config_path.exists():
+        raise RuntimeError(f"Missing required config file: {config_path}")
 
-    if os.name == "nt":
-        cwd_based = Path(str(Path.cwd()).replace("SmartOdoo", "DockerProjects"))
-        candidates = [cwd_based, documents_dir / "DockerProjects"] + candidates[1:]
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as error:
+        raise RuntimeError(f"Failed to load '{config_path.name}': {error}") from error
 
-    if additional_candidates:
-        candidates.extend(additional_candidates)
+    platform_key = "windows" if os.name == "nt" else "linux"
+    platform_values = payload.get(platform_key)
+    if not isinstance(platform_values, dict):
+        raise RuntimeError(
+            f"Missing required '{platform_key}' section in {config_path.name}."
+        )
 
-    candidates = unique_paths(candidates)
+    required_keys = ["PROJECTS_DIR", "ENTERPRISE_LOCATION", "UPGRADE_UTIL_LOCATION"]
+    missing_keys = [key for key in required_keys if not str(platform_values.get(key, "")).strip()]
+    if missing_keys:
+        missing = ", ".join(missing_keys)
+        raise RuntimeError(
+            f"Missing required config keys in '{platform_key}' section: {missing}"
+        )
 
-    base_path = candidates[0]
-    for candidate in candidates:
-        if candidate.exists():
-            base_path = candidate
-            break
-
-    if ensure_exists:
-        base_path.mkdir(parents=True, exist_ok=True)
-
-    return base_path
-
-
-def resolve_project_path(project_name: str, *, additional_candidates: Iterable[Path] | None = None) -> Path:
-    """Resolve full path for a named project inside DockerProjects."""
-    base_path = resolve_projects_base(additional_candidates=additional_candidates, ensure_exists=False)
-    return base_path / project_name
+    return {
+        "PROJECTS_DIR": resolve_config_path(str(platform_values["PROJECTS_DIR"]), base_dir=root_dir),
+        "ENTERPRISE_LOCATION": resolve_config_path(str(platform_values["ENTERPRISE_LOCATION"]), base_dir=root_dir),
+        "UPGRADE_UTIL_LOCATION": resolve_config_path(str(platform_values["UPGRADE_UTIL_LOCATION"]), base_dir=root_dir),
+    }

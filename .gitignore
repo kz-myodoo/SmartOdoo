@@ -6,6 +6,7 @@
 /upgrade-util/*
 /upgrade-util
 /odoo
+*.deb
 
 # Additional exceptions.
 .idea/

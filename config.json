@@ -1,0 +1,12 @@
+{
+    "windows": {
+        "PROJECTS_DIR": "C:\\Users\\%USERNAME%\\Documents\\DockerProjects",
+        "ENTERPRISE_LOCATION": ".\\enterprise",
+        "UPGRADE_UTIL_LOCATION": ".\\upgrade-util"
+    },
+    "linux": {
+        "PROJECTS_DIR": "~/Dokumenty/DockerProjects",
+        "ENTERPRISE_LOCATION": "./enterprise",
+        "UPGRADE_UTIL_LOCATION": "./upgrade-util"
+    }
+}
