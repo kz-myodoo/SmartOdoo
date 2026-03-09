@@ -1,2 +1,2 @@
 tk
-pygubu-designer
+pygubu
