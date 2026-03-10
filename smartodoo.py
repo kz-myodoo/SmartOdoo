@@ -10,7 +10,7 @@ import subprocess
 import sys
 from urllib.request import urlopen
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from tools import load_platform_paths
 
@@ -24,6 +24,7 @@ ENTRYPOINT = ROOT / "entrypoint.sh"
 LAUNCH_JSON = ROOT / "launch.json"
 ENCPASS = ROOT / "encpass.sh"
 ENCPASS_BUCKET = "smartodoo"
+WINDOWS_SECRET_DIR = ROOT / "secret"
 
 
 ODOO_VER = "19.0"
@@ -34,6 +35,7 @@ ODOO_ENTERPRISE_REPOSITORY = "enterprise"
 UPGRADE_UTIL_REPOSITORY = "git@github.com:odoo/upgrade-util.git"
 IS_WINDOWS = os.name == "nt"
 ALLOW_STDIN_PROMPTS_ENV = "SMARTODOO_ALLOW_STDIN_PROMPTS"
+GUI_MODE_ENV = "SMARTODOO_GUI_MODE"
 
 
 def eprint(msg: str) -> None:
@@ -47,15 +49,55 @@ ENTERPRISE_LOCATION = PLATFORM_PATHS["ENTERPRISE_LOCATION"]
 UPGRADE_UTIL_LOCATION = PLATFORM_PATHS["UPGRADE_UTIL_LOCATION"]
 
 
-def run(cmd: list[str], cwd: Optional[Path] = None, check: bool = True, capture_output: bool = False) -> subprocess.CompletedProcess:
+def _windows_hidden_subprocess_kwargs() -> dict[str, Any]:
+    """Hide Windows console windows for child processes when running from GUI mode."""
+    if not IS_WINDOWS or os.getenv(GUI_MODE_ENV) != "1":
+        return {}
+
+    kwargs: dict[str, Any] = {}
+    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if create_no_window:
+        kwargs["creationflags"] = create_no_window
+
+    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_cls is not None:
+        startupinfo = startupinfo_cls()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
+
+
+def run(
+    cmd: list[str],
+    cwd: Optional[Path] = None,
+    check: bool = True,
+    capture_output: bool = False,
+    env: Optional[dict[str, str]] = None,
+    stdin: Any = None,
+) -> subprocess.CompletedProcess:
     """Run a subprocess command with common defaults."""
-    return subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        text=True,
-        check=check,
-        capture_output=capture_output,
-    )
+    run_kwargs: dict[str, Any] = {
+        "cwd": str(cwd) if cwd else None,
+        "text": True,
+        "check": check,
+        "capture_output": capture_output,
+        "env": env,
+        **_windows_hidden_subprocess_kwargs(),
+    }
+
+    if stdin is not None:
+        run_kwargs["stdin"] = stdin
+
+    # On Windows GUI mode (pythonw), explicit forwarding keeps child process logs visible
+    # in SmartOdoo GUI output instead of disappearing due to missing console handles.
+    if IS_WINDOWS and os.getenv(GUI_MODE_ENV) == "1" and not capture_output:
+        if sys.stdout is not None:
+            run_kwargs["stdout"] = sys.stdout
+        if sys.stderr is not None:
+            run_kwargs["stderr"] = sys.stderr
+
+    return subprocess.run(cmd, **run_kwargs)
 
 
 def detect_compose_base() -> list[str]:
@@ -143,22 +185,54 @@ def replace_line(content: str, key: str, value: str) -> str:
     return re.sub(pattern, lambda _match: replacement, content, flags=re.MULTILINE)
 
 
+def to_compose_path(value: Path | str) -> str:
+    """Format host path for Docker Compose environment variables."""
+    raw = str(value)
+    return raw.replace("\\", "/") if IS_WINDOWS else raw
+
+
 def customize_env(project_name: str, project_fullpath: Path, odoo_ver: str, psql_ver: str) -> None:
     """Populate .env template with values for the current project."""
     content = read_text(ENV_FILE)
+    enterprise_location = to_compose_path(ENTERPRISE_LOCATION / odoo_ver)
+    upgrade_util_location = to_compose_path(UPGRADE_UTIL_LOCATION)
+    project_location = to_compose_path(project_fullpath)
     content = replace_line(content, "PROJECT_NAME", project_name)
-    content = replace_line(content, "ENTERPRISE_LOCATION", f"{ENTERPRISE_LOCATION}/{odoo_ver}")
-    content = replace_line(content, "UPGRADE_UTIL_LOCATION", f"{UPGRADE_UTIL_LOCATION}")
+    content = replace_line(content, "ENTERPRISE_LOCATION", enterprise_location)
+    content = replace_line(content, "UPGRADE_UTIL_LOCATION", upgrade_util_location)
     content = replace_line(content, "ODOO_VER", odoo_ver)
     content = replace_line(content, "ODOO_REVISION", ODOO_REVISION)
     content = replace_line(content, "PSQL_VER", psql_ver)
     content = replace_line(content, "ODOO_CONT_NAME", f"{project_name}-web")
     content = replace_line(content, "PSQL_CONT_NAME", f"{project_name}-db")
     content = replace_line(content, "SMTP_CONT_NAME", f"{project_name}-smtp")
-    content = replace_line(content, "PROJECT_LOCATION", str(project_fullpath))
+    content = replace_line(content, "PROJECT_LOCATION", project_location)
     write_text(ENV_FILE, content)
     print()
     print(content)
+
+
+def normalize_project_env_paths(project_fullpath: Path) -> None:
+    """Normalize path-like keys in project .env to Docker-friendly path format."""
+    if not IS_WINDOWS:
+        return
+
+    env_path = project_fullpath / ".env"
+    if not env_path.exists():
+        return
+
+    content = read_text(env_path)
+    keys = ("PROJECT_LOCATION", "ENTERPRISE_LOCATION", "UPGRADE_UTIL_LOCATION")
+
+    for key in keys:
+        match = re.search(rf"^{re.escape(key)}=(.*)$", content, flags=re.MULTILINE)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        normalized = to_compose_path(value)
+        content = replace_line(content, key, normalized)
+
+    write_text(env_path, content)
 
 
 def standarize_env() -> None:
@@ -182,11 +256,22 @@ def get_secret(secret_name: str) -> str:
     env_key = secret_name.upper()
     env_value = os.getenv(env_key)
 
+    if IS_WINDOWS:
+        windows_value = get_windows_secret(secret_name, env_value)
+        if windows_value:
+            return windows_value
+
+        if env_value:
+            return env_value
+
+        raise RuntimeError(
+            f"Missing secret '{secret_name}'. Set env var '{env_key}' or configure Windows secret files in '{WINDOWS_SECRET_DIR}'."
+        )
+
     bash_path = shutil.which("bash")
     if not IS_WINDOWS and ENCPASS.exists() and bash_path:
-        show_result = subprocess.run(
+        show_result = run(
             [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
-            text=True,
             capture_output=True,
             check=False,
         )
@@ -199,14 +284,12 @@ def get_secret(secret_name: str) -> str:
         if sys.stdin.isatty() or allow_stdin_prompts:
             print(f"Secret '{secret_name}' not found in bucket '{ENCPASS_BUCKET}'.")
             print("Adding secret interactively...")
-            add_result = subprocess.run(
+            add_result = run(
                 [str(ENCPASS), "add", "-f", ENCPASS_BUCKET, secret_name],
-                text=True,
                 check=False,
             )
-            verify_result = subprocess.run(
+            verify_result = run(
                 [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
-                text=True,
                 capture_output=True,
                 check=False,
             )
@@ -224,18 +307,16 @@ def get_secret(secret_name: str) -> str:
             add_env["ENCPASS_SECRET_INPUT"] = env_value
             add_env["ENCPASS_CSECRET_INPUT"] = env_value
 
-            add_result = subprocess.run(
+            add_result = run(
                 [str(ENCPASS), "add", "-f", ENCPASS_BUCKET, secret_name],
-                text=True,
                 capture_output=True,
                 check=False,
                 env=add_env,
                 stdin=subprocess.DEVNULL,
             )
             if add_result.returncode == 0:
-                verify_result = subprocess.run(
+                verify_result = run(
                     [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
-                    text=True,
                     capture_output=True,
                     check=False,
                 )
@@ -258,6 +339,124 @@ def get_secret(secret_name: str) -> str:
     raise RuntimeError(
         f"Missing secret '{secret_name}'. Set env var '{env_key}' or configure encpass.sh (Linux/macOS)."
     )
+
+
+def get_windows_secret(secret_name: str, env_value: Optional[str]) -> Optional[str]:
+    """Resolve secret on Windows from legacy CliXml files or create them via Get-Credential."""
+    if not IS_WINDOWS:
+        return None
+
+    secret_specs: dict[str, tuple[str, str]] = {
+        "github_addons_token": ("git_addons.xml", "Provide login and token for YOUR github account."),
+        "github_enterprise_token": ("git_ent.xml", "Provide login and token for COMPANY github account."),
+    }
+    spec = secret_specs.get(secret_name)
+    if not spec:
+        return env_value
+
+    file_name, prompt_message = spec
+    secret_file = WINDOWS_SECRET_DIR / file_name
+
+    loaded_value = load_windows_credential_token(secret_file)
+    if loaded_value:
+        return loaded_value
+
+    if env_value:
+        save_windows_credential_token(secret_file, env_value, username="token")
+        return env_value
+
+    allow_stdin_prompts = os.getenv(ALLOW_STDIN_PROMPTS_ENV) == "1"
+    if not (sys.stdin.isatty() or allow_stdin_prompts):
+        return None
+
+    return prompt_windows_credential_token(secret_file, prompt_message)
+
+
+def find_powershell() -> Optional[str]:
+    """Find a PowerShell executable (pwsh preferred, fallback to Windows PowerShell)."""
+    return shutil.which("pwsh") or shutil.which("powershell")
+
+
+def _escape_ps_single_quoted(value: str) -> str:
+    """Escape a string for PowerShell single-quoted literals."""
+    return value.replace("'", "''")
+
+
+def _ensure_hidden_secret_dir() -> None:
+    """Create Windows secret directory and mark it hidden."""
+    WINDOWS_SECRET_DIR.mkdir(parents=True, exist_ok=True)
+    run(["attrib", "+h", str(WINDOWS_SECRET_DIR)], check=False)
+
+
+def load_windows_credential_token(secret_file: Path) -> Optional[str]:
+    """Read token from a legacy PowerShell CliXml credential file."""
+    if not secret_file.exists():
+        return None
+
+    powershell = find_powershell()
+    if not powershell:
+        return None
+
+    path_escaped = _escape_ps_single_quoted(str(secret_file))
+    script = (
+        f"$cred = Import-Clixml -Path '{path_escaped}'; "
+        "if ($null -eq $cred) { exit 1 }; "
+        "$pwd = $cred.GetNetworkCredential().Password; "
+        "if ([string]::IsNullOrWhiteSpace($pwd)) { exit 1 }; "
+        "Write-Output $pwd"
+    )
+    result = run([powershell, "-NoProfile", "-Command", script], check=False, capture_output=True)
+    if result.returncode != 0:
+        return None
+
+    value = result.stdout.strip()
+    return value or None
+
+
+def save_windows_credential_token(secret_file: Path, token: str, username: str = "token") -> None:
+    """Persist token into a legacy PowerShell CliXml credential file."""
+    powershell = find_powershell()
+    if not powershell:
+        return
+
+    _ensure_hidden_secret_dir()
+    token_escaped = _escape_ps_single_quoted(token)
+    username_escaped = _escape_ps_single_quoted(username)
+    path_escaped = _escape_ps_single_quoted(str(secret_file))
+    script = (
+        f"$secure = ConvertTo-SecureString '{token_escaped}' -AsPlainText -Force; "
+        f"$cred = New-Object System.Management.Automation.PSCredential('{username_escaped}', $secure); "
+        f"$cred | Export-Clixml -Path '{path_escaped}'"
+    )
+    run([powershell, "-NoProfile", "-Command", script], check=False)
+
+
+def prompt_windows_credential_token(secret_file: Path, prompt_message: str) -> str:
+    """Prompt for credentials on Windows and persist token to CliXml file."""
+    powershell = find_powershell()
+    if not powershell:
+        raise RuntimeError("PowerShell is required to manage secrets on Windows.")
+
+    _ensure_hidden_secret_dir()
+    path_escaped = _escape_ps_single_quoted(str(secret_file))
+    prompt_escaped = _escape_ps_single_quoted(prompt_message)
+    script = (
+        f"$cred = Get-Credential -Message '{prompt_escaped}'; "
+        "if ($null -eq $cred) { exit 1 }; "
+        "$pwd = $cred.GetNetworkCredential().Password; "
+        "if ([string]::IsNullOrWhiteSpace($pwd)) { exit 1 }; "
+        f"$cred | Export-Clixml -Path '{path_escaped}'; "
+        "Write-Output $pwd"
+    )
+    result = run([powershell, "-NoProfile", "-Command", script], check=False, capture_output=True)
+    if result.returncode != 0:
+        error_details = result.stderr.strip() or "no details"
+        raise RuntimeError(f"Failed to capture Windows credential secret. Details: {error_details}")
+
+    token = result.stdout.strip()
+    if not token:
+        raise RuntimeError("Failed to capture Windows credential secret (empty value).")
+    return token
 
 
 def compose_exec_with_fallback(project_fullpath: Path, primary: list[str], fallback: list[str]) -> None:
@@ -532,6 +731,8 @@ def project_exist(args: argparse.Namespace, project_fullpath: Path) -> None:
     entrypoint_path = project_fullpath / "entrypoint.sh"
     if entrypoint_path.exists():
         normalize_to_lf(entrypoint_path)
+
+    normalize_project_env_paths(project_fullpath)
 
     if args.delete:
         delete_project(project_fullpath)

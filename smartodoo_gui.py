@@ -72,6 +72,25 @@ class SmartOdooUI(tk.Tk):
         )
         self.after(120, self._drain_output)
 
+    def _windows_subprocess_kwargs(self) -> dict[str, object]:
+        """Hide subprocess console windows on Windows."""
+        if os.name != "nt":
+            return {}
+
+        kwargs: dict[str, object] = {}
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if create_no_window:
+            kwargs["creationflags"] = create_no_window
+
+        startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+        if startupinfo_cls is not None:
+            startupinfo = startupinfo_cls()
+            startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+            kwargs["startupinfo"] = startupinfo
+
+        return kwargs
+
     def _build_variables(self) -> None:
         self.name_var = tk.StringVar()
         self.odoo_var = tk.StringVar(value="19.0")
@@ -358,7 +377,14 @@ class SmartOdooUI(tk.Tk):
                 self.after(0, lambda: self._apply_rebuild_containers(project_name, []))
                 return
 
-            result = subprocess.run(cmd, cwd=str(project_path), text=True, capture_output=True, check=False)
+            result = subprocess.run(
+                cmd,
+                cwd=str(project_path),
+                text=True,
+                capture_output=True,
+                check=False,
+                **self._windows_subprocess_kwargs(),
+            )
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
                 raise RuntimeError(stderr)
@@ -371,7 +397,13 @@ class SmartOdooUI(tk.Tk):
     def _detect_compose_base(self) -> list[str]:
         docker_path = shutil.which("docker")
         if docker_path:
-            test = subprocess.run([docker_path, "compose", "version"], text=True, capture_output=True, check=False)
+            test = subprocess.run(
+                [docker_path, "compose", "version"],
+                text=True,
+                capture_output=True,
+                check=False,
+                **self._windows_subprocess_kwargs(),
+            )
             if test.returncode == 0:
                 return [docker_path, "compose"]
 
@@ -448,8 +480,14 @@ class SmartOdooUI(tk.Tk):
         try:
             env = dict(os.environ)
             env["GIT_TERMINAL_PROMPT"] = "0"
-            result = subprocess.run(["git", "ls-remote", "--heads", repo_url],
-                                    text=True, capture_output=True, check=False, env=env)
+            result = subprocess.run(
+                ["git", "ls-remote", "--heads", repo_url],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+                **self._windows_subprocess_kwargs(),
+            )
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
                 raise RuntimeError(stderr)
@@ -623,7 +661,13 @@ class SmartOdooUI(tk.Tk):
         python_executable = sys.executable or "python"
         cmd = [python_executable, str(self.script_path), list_flag]
         try:
-            result = subprocess.run(cmd, text=True, capture_output=True, check=False)
+            result = subprocess.run(
+                cmd,
+                text=True,
+                capture_output=True,
+                check=False,
+                **self._windows_subprocess_kwargs(),
+            )
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
                 raise RuntimeError(f"{stderr}")
@@ -732,6 +776,7 @@ class SmartOdooUI(tk.Tk):
         self._pending_secret_value = None
         child_env = dict(os.environ)
         child_env["SMARTODOO_ALLOW_STDIN_PROMPTS"] = "1"
+        child_env["SMARTODOO_GUI_MODE"] = "1"
         self.process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -743,6 +788,7 @@ class SmartOdooUI(tk.Tk):
             errors="replace",
             bufsize=1,
             universal_newlines=True,
+            **self._windows_subprocess_kwargs(),
         )
         threading.Thread(target=self._read_process_output, daemon=True).start()
 
