@@ -52,8 +52,10 @@ class SmartOdooUI(tk.Tk):
         self._pending_secret_value: str | None = None
 
         self._build_variables()
+        self._load_ui_settings()
         self._build_ui_from_xml()
         self._build_menu()
+        self._apply_theme()
         self._connect_events()
 
         self._toggle_action_fields()
@@ -106,8 +108,52 @@ class SmartOdooUI(tk.Tk):
         self.tags_var = tk.StringVar()
         self.rebuild_var = tk.StringVar()
         self.pip_var = tk.StringVar()
+        self.dark_mode_var = tk.BooleanVar(value=False)
 
         self.command_preview_var = tk.StringVar(value="Command: ")
+
+    def _load_ui_settings(self) -> None:
+        try:
+            if not self.config_json_path.exists():
+                return
+            payload = json.loads(self.config_json_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return
+            ui_settings = payload.get("ui", {})
+            if not isinstance(ui_settings, dict):
+                return
+            dark_mode = ui_settings.get("dark_mode")
+            if isinstance(dark_mode, bool):
+                self.dark_mode_var.set(dark_mode)
+        except (json.JSONDecodeError, OSError):
+            # Keep defaults when config cannot be read.
+            return
+
+    def _save_ui_settings(self) -> None:
+        payload: dict[str, object]
+        try:
+            if self.config_json_path.exists():
+                loaded = json.loads(self.config_json_path.read_text(encoding="utf-8"))
+                payload = loaded if isinstance(loaded, dict) else {}
+            else:
+                payload = {}
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+
+        ui_settings = payload.get("ui")
+        if not isinstance(ui_settings, dict):
+            ui_settings = {}
+            payload["ui"] = ui_settings
+
+        ui_settings["dark_mode"] = bool(self.dark_mode_var.get())
+
+        try:
+            self.config_json_path.write_text(
+                json.dumps(payload, indent=4, ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            messagebox.showerror("Save settings failed", f"Cannot save UI settings: {exc}")
 
     def _build_ui_from_xml(self) -> None:
         if not self.view_path.exists():
@@ -194,6 +240,12 @@ class SmartOdooUI(tk.Tk):
     def _build_menu(self) -> None:
         menubar = tk.Menu(self)
         settings_menu = tk.Menu(menubar, tearoff=False)
+        settings_menu.add_checkbutton(
+            label="Dark mode",
+            variable=self.dark_mode_var,
+            command=self._on_dark_mode_toggle,
+        )
+        settings_menu.add_separator()
         settings_menu.add_command(
             label="config.json",
             command=lambda: self._open_settings_file(self.config_json_path),
@@ -204,6 +256,166 @@ class SmartOdooUI(tk.Tk):
         )
         menubar.add_cascade(label="Settings", menu=settings_menu)
         self.config(menu=menubar)
+        self.settings_menu = settings_menu
+
+    def _on_dark_mode_toggle(self) -> None:
+        self._apply_theme()
+        self._save_ui_settings()
+
+    def _apply_theme(self) -> None:
+        dark_mode = self.dark_mode_var.get()
+
+        if dark_mode:
+            colors = {
+                "bg": "#1f2437",
+                "fg": "#e6e8ef",
+                "input_bg": "#2a3044",
+                "input_fg": "#f2f4fa",
+                "input_border": "#4e566f",
+                "panel_bg": "#383f53",
+                "accent": "#875a7b",
+                "accent_hover": "#9c6b8f",
+                "focus": "#00cfc8",
+                "focus_fg": "#102127",
+                "list_bg": "#3a4258",
+                "list_fg": "#f2f4fa",
+                "disabled": "#8f96aa",
+            }
+        else:
+            colors = {
+                "bg": "#f3f4f6",
+                "fg": "#1b1f24",
+                "input_bg": "#ffffff",
+                "input_fg": "#1b1f24",
+                "input_border": "#cbd5e1",
+                "panel_bg": "#ffffff",
+                "accent": "#2563eb",
+                "accent_hover": "#1d4ed8",
+                "focus": "#dbeafe",
+                "focus_fg": "#1e3a8a",
+                "list_bg": "#ffffff",
+                "list_fg": "#1b1f24",
+                "disabled": "#9ca3af",
+            }
+
+        button_bg = colors["accent"] if dark_mode else colors["input_bg"]
+        button_fg = "#f8ecf4" if dark_mode else colors["fg"]
+        button_active_fg = "#fff4fa" if dark_mode else "#ffffff"
+
+        self.configure(bg=colors["bg"])
+        self.mainframe.configure(style="Main.TFrame")
+        self.form.configure(style="Main.TFrame")
+        self.actions.configure(style="Main.TFrame")
+        self.output_frame.configure(style="Main.TFrame")
+
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure(".", background=colors["bg"], foreground=colors["fg"])
+        style.configure("Main.TFrame", background=colors["bg"])
+        style.configure("TFrame", background=colors["bg"])
+        style.configure("TLabel", background=colors["bg"], foreground=colors["fg"])
+        style.configure("TCheckbutton", background=colors["bg"], foreground=colors["fg"])
+        style.map("TCheckbutton", background=[("active", colors["bg"])])
+        style.configure(
+            "TButton",
+            background=button_bg,
+            foreground=button_fg,
+            bordercolor=colors["accent"],
+            lightcolor=colors["accent"],
+            darkcolor=colors["accent"],
+        )
+        style.map(
+            "TButton",
+            background=[("active", colors["accent_hover"]), ("disabled", colors["input_bg"])],
+            foreground=[("active", button_active_fg), ("disabled", colors["disabled"])],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["input_bg"],
+            foreground=colors["input_fg"],
+            insertcolor=colors["input_fg"],
+            bordercolor=colors["input_border"],
+            lightcolor=colors["input_border"],
+            darkcolor=colors["input_border"],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=colors["input_bg"],
+            foreground=colors["input_fg"],
+            background=colors["panel_bg"],
+            selectbackground=colors["focus"],
+            selectforeground=colors["focus_fg"],
+            bordercolor=colors["input_border"],
+            lightcolor=colors["input_border"],
+            darkcolor=colors["input_border"],
+            arrowcolor=colors["fg"],
+            arrowsize=16,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", colors["input_bg"]), ("disabled", colors["input_bg"])],
+            foreground=[("readonly", colors["input_fg"]), ("disabled", colors["disabled"])],
+            background=[("readonly", colors["panel_bg"]), ("active", colors["panel_bg"])],
+            selectbackground=[("readonly", colors["focus"])],
+            selectforeground=[("readonly", colors["focus_fg"])],
+            arrowcolor=[("disabled", colors["disabled"]), ("active", colors["focus"]), ("readonly", colors["fg"])],
+        )
+
+        # Improve combobox dropdown list readability in both themes.
+        self.option_add("*TCombobox*Listbox.background", colors["list_bg"])
+        self.option_add("*TCombobox*Listbox.foreground", colors["list_fg"])
+        self.option_add("*TCombobox*Listbox.selectBackground", colors["focus"])
+        self.option_add("*TCombobox*Listbox.selectForeground", colors["focus_fg"])
+        self.option_add("*TCombobox*Listbox.highlightBackground", colors["input_border"])
+        self.option_add("*TCombobox*Listbox.highlightColor", colors["focus"])
+        self.option_add("*Listbox.background", colors["list_bg"])
+        self.option_add("*Listbox.foreground", colors["list_fg"])
+        self.option_add("*Listbox.selectBackground", colors["focus"])
+        self.option_add("*Listbox.selectForeground", colors["focus_fg"])
+        self._refresh_combobox_popdown_colors(colors)
+
+        self.output_text.configure(
+            background=colors["input_bg"],
+            foreground=colors["input_fg"],
+            insertbackground=colors["input_fg"],
+            selectbackground=colors["focus"],
+            selectforeground=colors["fg"],
+            highlightthickness=1,
+            highlightbackground=colors["input_border"],
+            highlightcolor=colors["focus"],
+        )
+
+        if hasattr(self, "settings_menu"):
+            self.settings_menu.configure(
+                background=colors["input_bg"],
+                foreground=colors["fg"],
+                activebackground=colors["accent"],
+                activeforeground=colors["fg"],
+            )
+
+    def _refresh_combobox_popdown_colors(self, colors: dict[str, str]) -> None:
+        for widget in (self.action_combo, self.project_name_entry, self.odoo_combo, self.psql_combo, self.branch_combo, self.rebuild_combo):
+            try:
+                popdown = self.tk.call("ttk::combobox::PopdownWindow", str(widget))
+                listbox = f"{popdown}.f.l"
+                self.tk.call(
+                    listbox,
+                    "configure",
+                    "-background",
+                    colors["list_bg"],
+                    "-foreground",
+                    colors["list_fg"],
+                    "-selectbackground",
+                    colors["focus"],
+                    "-selectforeground",
+                    colors["focus_fg"],
+                    "-highlightbackground",
+                    colors["input_border"],
+                    "-highlightcolor",
+                    colors["focus"],
+                )
+            except tk.TclError:
+                continue
 
     def _open_settings_file(self, file_path: Path) -> None:
         if not file_path.exists():

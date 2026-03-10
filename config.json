@@ -1,4 +1,7 @@
 {
+    "ui": {
+        "dark_mode": true
+    },
     "windows": {
         "PROJECTS_DIR": "C:\\Users\\%USERNAME%\\Documents\\DockerProjects",
         "ENTERPRISE_LOCATION": ".\\enterprise",
