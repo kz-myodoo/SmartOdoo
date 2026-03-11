@@ -8,6 +8,7 @@
 /upgrade-util/*
 /upgrade-util
 /odoo
+/psql/
 
 # Additional exceptions.
 .idea/
