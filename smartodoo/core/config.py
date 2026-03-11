@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 import re
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -35,3 +37,32 @@ class AppConfig:
         Odrzuca niepotrzebne '12.0' dla psql pozostawiając samą '12'.
         """
         return self.psql_version[:-2] if self.psql_version.endswith(".0") else self.psql_version
+
+
+class Settings(BaseSettings):
+    """
+    Walidacja środowiska Odoo wymuszająca pełen pakiet 16 zmiennych potrzebnych
+    do bezbłędnego uruchomienia kontenera na podstawie pliku .env w projekcie.
+    """
+    PROJECT_LOCATION: str = Field(...)
+    ENTERPRISE_LOCATION: str = Field(...)
+    UPGRADE_UTIL_LOCATION: str = Field(...)
+    PROJECT_NAME: str = Field(...)
+    ODOO_VER: str = Field(...)
+    ODOO_REVISION: str = Field("")
+    PSQL_VER: str = Field(...)
+    ODOO_CONT_NAME: str = Field(...)
+    PSQL_CONT_NAME: str = Field(...)
+    SMTP_CONT_NAME: str = Field(...)
+    ODOO_VOLUME: str = Field(...)
+    PSQL_VOLUME: str = Field(...)
+    SMTP_VOLUME: str = Field(...)
+    PSQL_DB_NAME: str = Field(...)
+    PSQL_DB_PASSWORD: str = Field(...)
+    PSQL_DB_USERNAME: str = Field(...)
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )

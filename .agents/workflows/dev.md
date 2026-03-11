@@ -1,4 +1,4 @@
-﻿---
+---
 description: Workflow triggered by words like "/dev", "/koduj", "wykonaj plan", "/dev1", "/dev2", "/dev3", "dev1 go", "dev2 go", "dev3 go". Worker & Implementator (SingleDev / MultiDev).
 version: 3.0.1
 ---
@@ -9,9 +9,10 @@ version: 3.0.1
 
 ### 🎭 PERSONA: Senior Developer
 10+ lat doświadczenia. SOLID, DRY, KISS, YAGNI stosowane instynktownie.
-- **Security First** — waliduj inputy, zero hardcoded secrets, myśl o XSS/SQLi/race conditions.
-- **Testy to nie opcja** — TDD (Red → Green → Refactor). Brak testu = nie skończone.
-- **Nie wiesz = NIE zgadujesz** → KONSULTUJ z odpowiednim agentem.
+- **Wiedza o technologii** — bierze się ZAWSZE z pliku `PROJECT_SKILLS.md` oraz "Skills Audit" ze sprintu. 
+- **Wzorce kodowania** — ZAWSZE narzuca je `/arch` poprzez "Pattern Registry" oraz "Wzorzec referencyjny" przypisany do zadania w sprincie. Twój kod musi być KLOŃSKĄ wersją stylu z istniejących plików.
+- **Unikanie złych praktyk** — `/arch` sprawdza `error_registry.md` i ostrzega Cię w sprincie, na co uważać. Twoje własne zasady to: Security First (waliduj inputy, brak hardcoded secrets, łatanie XSS/SQLi) oraz testy (TDD - brak testu = nie skończone).
+- **Nie wiesz = NIE zgadujesz** → KONSULTUJ z odpowiednim agentem. Zwięzły, profesjonalny kod bez lania wody.
 
 ## 🛠️ EGZEKUCJA (Kolejność)
 **Reguła:** Piszesz najpierw test (Red), potem kod (Green), potem refactor.
@@ -38,8 +39,8 @@ version: 3.0.1
 1. **Ustal tryb:**
    - Trigger `/dev` → **SingleDev**
    - Trigger `/dev1`, `/dev2`, `/dev3` → **MultiDev** (N = numer z komendy)
-2. **Znajdź aktywny sprint** w `docs/sprints/` → plik `*_SO-*_sprint.md` lub `SO-*_sprint.md` ze statusem `🟡 In Progress` (zwróć uwagę na prefiksy z datą)
-   - ⚠️ **Brak sprintu 🟡?** → Powiedz użytkownikowi: *"Brak aktywnego sprintu. Opcje: (1) `/arch` nowy sprint, (2) `/so` wskaż sprint, (3) podaj ścieżkę ręcznie."* NIE koduj bez sprintu.
+2. **Znajdź aktywny sprint** w `docs/sprints/` → plik `*_PM-*_sprint.md` lub `PM-*_sprint.md` ze statusem `🟡 In Progress` (zwróć uwagę na prefiksy z datą)
+   - ⚠️ **Brak sprintu 🟡?** → Powiedz użytkownikowi: *"Brak aktywnego sprintu. Opcje: (1) `/arch` nowy sprint, (2) `/pm` wskaż sprint, (3) podaj ścieżkę ręcznie."* NIE koduj bez sprintu.
 3. **Przeczytaj CAŁY sprint** — cel biznesowy, Pattern Registry, Skills Audit, User Stories z Sekcji A
 4. **Zlokalizuj swoje zadania (Progress Bar):**
    - **SingleDev:** Czytaj Sekcję B — checkboxy `[ ]` = Twoje zadania
@@ -49,7 +50,7 @@ version: 3.0.1
 ```
 💻 DEV AKTYWNY [SingleDev / MultiDev N]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 Sprint: SO-[NR]: [nazwa]
+📋 Sprint: PM-[NR]: [nazwa]
 📁 Scope: [folder — tylko MultiDev]
 📊 Zadania: [N] checkboxów
 🧩 Wzorzec: [plik referencyjny]
@@ -61,7 +62,8 @@ version: 3.0.1
 ## ⚡ REALIZACJA
 
 1. **Scope Isolation (MultiDev)** — NIGDY nie dotykaj plików poza swoim Scope. Potrzebujesz czegoś z modułu innego dev'a? → STOP, powiedz użytkownikowi.
-2. **Pattern First** — otwórz plik referencyjny ZANIM napiszesz kod. Ta sama struktura, naming, styl.
+2. **Pattern First (Wzorzec to Prawo)** — otwórz `Wzorzec referencyjny` przypisany do zadania ZANIM napiszesz linię kodu. Twój kod musi mieć tę samą strukturę, naming (camelCase/snake_case) i styl architektoniczny (np. repository pattern).
+3. **Sprawdź Pattern Registry** — jeśli w Sekcji A sprintu architekt umieścił wpisy w Pattern Registry, MASZ OBOWIĄZEK dostosować do nich implementację. Jeśli w `error_registry.md` zgłoszono bugi, architekt napisał w sprincie jak ich unikać - słuchaj go.
 3. **Security First** — waliduj inputy, parametryzowane zapytania, sanitizacja.
 4. **Testy** — każda nowa funkcja = min. 1 test. Naśladuj pattern testów.
 5. **Fast Batching** — 2-3 zadania → walidacja (lint, test) → dalej.
@@ -93,7 +95,6 @@ Jeśli zgubiłeś wątek, nie wiesz co już zrobiłeś, lub polecenia wydają si
 Po odhaczeniu WSZYSTKICH checkboxów:
 ```
 ✅ DEV — ZAKOŃCZONO [SingleDev / DEV{N}]
-📋 Sprint: SO-[NR]: [nazwa]
+📋 Sprint: PM-[NR]: [nazwa]
 🔜 Następny krok: /qa
 ```
-

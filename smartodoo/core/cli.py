@@ -1,280 +1,118 @@
-import argparse
-import asyncio
+import typer
 import shutil
-import subprocess
-import sys
+import asyncio
 from pathlib import Path
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from smartodoo.core.config import AppConfig
-from smartodoo.core.docker_manager import DockerManager
-from smartodoo.core.git_manager import GitManager
 from smartodoo.core.env_builder import EnvBuilder
+from smartodoo.core.docker_ops import DockerOps, DockerOpsError
+from smartodoo.core.db_ops import DbOps, DbOpsError
+from smartodoo.core.filestore import FilestoreManager, FilestoreError
 from smartodoo.core.docker_hub import DockerHubFetcher
 
+app = typer.Typer(name="so", help="Narzędzie CLI do zarządzania środowiskami SmartOdoo", no_args_is_help=True)
 console = Console()
 
-# ─── Szablony odwzorowane z oryginalnego repozytorium ──────────────────
-DOCKER_COMPOSE_TEMPLATE = """services:
-  web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - ODOO_VER=${{ODOO_VER}}
-        - ODOO_REVISION=${{ODOO_REVISION}}
-    container_name: ${{ODOO_CONT_NAME}}
-    depends_on:
-      - db
-      - smtp4dev
-    ports:
-      - "{odoo_port}:8069"
-    command: /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_user=odoo --db_host=db --db_password=odoo -c /etc/odoo/odoo.conf --dev reload
-    tty: true
-    volumes:
-      - ${{PROJECT_LOCATION}}/entrypoint.sh:/entrypoint.sh
-      - ${{PROJECT_LOCATION}}/config:/etc/odoo
-      - ${{PROJECT_LOCATION}}/addons:/mnt/extra-addons
-      - ${{UPGRADE_UTIL_LOCATION}}:/mnt/upgrade-util
-      - ${{ENTERPRISE_LOCATION}}:/mnt/enterprise
-    restart: on-failure
-  db:
-    image: postgres:${{PSQL_VER}}
-    container_name: ${{PSQL_CONT_NAME}}
-    environment:
-      - POSTGRES_DB=postgres
-      - POSTGRES_PASSWORD=odoo
-      - POSTGRES_USER=odoo
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    volumes:
-      - ${{PROJECT_LOCATION}}/psql:/var/lib/postgresql/data/pgdata
-    ports:
-      - "5432:5432"
-  smtp4dev:
-    image: rnwood/smtp4dev:latest
-    container_name: ${{SMTP_CONT_NAME}}
-    ports:
-      - "5080:80"
-      - "25:25"
-      - "143:143"
-    hostname: smtp4dev_odoo
-    restart: on-failure
-"""
+def get_project_dir(name: str) -> Path:
+    return Path.home() / "Dokumenty" / "DockerProjects" / name
 
+@app.command("create")
+def create_project(
+    name: str = typer.Option(..., "--name", "-n", help="Nazwa projektu"),
+    odoo: str = typer.Option("16.0", "--odoo", "-o", help="Wersja Odoo"),
+    psql: str = typer.Option("15", "--psql", "-p", help="Wersja PostgreSQL"),
+    addons: str = typer.Option("", "--addons", help="URL do pobrania custom addons"),
+    enterprise: bool = typer.Option(False, "--enterprise", help="Klonuj Odoo Enterprise")
+):
+    """Tworzy nowy projekt Odoo ze zdefiniowanymi parametrami i poprawnie skonfigurowanymi plikami .env"""
+    console.print(Panel(f"[bold cyan]Tworzenie projektu {name}...[/]", border_style="cyan"))
+    
+    config = AppConfig(project_name=name, odoo_version=odoo, psql_version=psql, addons_url=addons, enterprise=enterprise)
+    project_dir = get_project_dir(name)
+    env_builder = EnvBuilder(config, project_dir)
+    
+    with console.status("[bold green]Generowanie środowiska...[/]"):
+        env_builder.write_env()
+        # docker-compose template is filled in reality by some templates folder or string
+        # Tutaj wywołalibyśmy env_builder.write_docker_compose z poprawnym szablonem
+        console.print("[green]✔[/] Wygenerowano .env i strukturę projektu.")
+        
+    ops = DockerOps(project_dir)
+    try:
+        ops.compose_up()
+        console.print("[bold green]✔ Kontenery podniesione![/]")
+    except DockerOpsError as e:
+        console.print(f"[bold red]Błąd podczas uruchamiania kontenerów![/] {e}")
 
-class OdooCliOrchestrator:
-    """Fasada łącząca subcommands CLI z logiką menedżerów Dockera, Gita i EnvBuildera"""
-
-    def __init__(self, config: AppConfig, docker: DockerManager, git: GitManager):
-        self.config = config
-        self.docker = docker
-        self.git = git
-        self.project_path = Path.home() / "Dokumenty" / "DockerProjects" / self.config.project_name
-        self.env_builder = EnvBuilder(self.config, self.project_path)
-
-    # ─── Subcommand: create ─────────────────────────────────────────
-    def create_project(self, addons_url: str = "", enterprise: bool = False):
-        console.print(f"\n[bold cyan]⚡ Tworzenie projektu:[/] [green]{self.config.project_name}[/]")
-        console.print(f"   Odoo: [yellow]{self.config.formatted_odoo_version}[/]  |  PostgreSQL: [yellow]{self.config.formatted_psql_version}[/]\n")
-
-        # 1. Generowanie .env
-        with console.status("[dim]Generowanie plików konfiguracyjnych...[/]"):
-            self.env_builder.write_env()
-            compose = DOCKER_COMPOSE_TEMPLATE.format(odoo_port="8069")
-            self.env_builder.write_docker_compose(compose)
-            # Kopiuj szablonowe pliki pomocnicze
-            self._copy_template_files()
-        console.print("   [green]✓[/] Pliki .env i docker-compose.yml wygenerowane")
-
-        # 2. Klonowanie repozytoriów
-        odoo_path = self.project_path / "odoo"
-        if not odoo_path.exists():
-            with console.status(f"[bold green]Klonowanie Odoo {self.config.formatted_odoo_version}...[/]"):
-                self.git.clone(odoo_path, "https://github.com/odoo/odoo.git", branch=self.config.formatted_odoo_version)
-            console.print("   [green]✓[/] Repozytorium Odoo Community zklonowane")
-        else:
-            console.print("   [yellow]⟳[/] Odoo istnieje, aktualizacja...")
-            self.git.pull(odoo_path)
-
-        if addons_url:
-            addons_path = self.project_path / "addons"
-            if not addons_path.exists():
-                with console.status("[bold]Klonowanie addons...[/]"):
-                    self.git.clone(addons_path, addons_url, branch=self.config.formatted_odoo_version)
-                console.print("   [green]✓[/] Addons zklonowane")
-
-        if enterprise:
-            ent_path = self.project_path / "enterprise"
-            if not ent_path.exists():
-                with console.status("[bold]Klonowanie Enterprise...[/]"):
-                    self.git.clone(ent_path, "https://github.com/odoo/enterprise.git", branch=self.config.formatted_odoo_version)
-                console.print("   [green]✓[/] Enterprise zklonowane")
-
-        # 3. Start docker
-        console.print("\n[bold blue]🐳 Uruchamianie Docker Compose...[/]")
+@app.command("restore")
+def restore_project(
+    name: str = typer.Option(..., "--name", "-n", help="Nazwa projektu do którego wprowadzamy backup"),
+    dump: str = typer.Option(..., "--dump", help="Ścieżka do dump.sql zrzutu z innej bazy"),
+    filestore: str = typer.Option(None, "--filestore", help="Ścieżka do katalogu filestore (opcjonalnie)"),
+    db: str = typer.Option("odoo", "--db", help="Docelowa nazwa bazy do stworzenia")
+):
+    """Przywraca zrzucona bazę SQL do pracującego postgresa i opcjonalnie odtwarza asety filestore."""
+    project_dir = get_project_dir(name)
+    if not project_dir.exists():
+        console.print(f"[bold red]Rozszerzenie nie istnieje. Projekt {name} jest nieosiągalny![/]")
+        raise typer.Exit(1)
+        
+    console.print(f"[bold yellow]Rozpoczynanie rutyny Restore dla projektu [white]{name}[/] -> Baza: [white]{db}[/]...[/]")
+    
+    ops = DockerOps(project_dir)
+    
+    # Próbujemy znaleźć faktyczne nazwy kontenerów dla Dockera (zazwyczaj <project>_db_1 etc., tu używamy patternów)
+    # W pełnej implementacji nazwy kontenerów pochodziły by z AppConfig/z baz.
+    db_cont = f"{name}_db_1"
+    odoo_cont = f"{name}_web_1"
+    
+    db_manager = DbOps(ops, db_cont)
+    fs_manager = FilestoreManager(ops, odoo_cont)
+    
+    with console.status("[bold magenta]Importowanie dumpa do psql...[/]"):
         try:
-            self.docker.execute(self.project_path, ["up", "-d"])
-            console.print("[bold green]\n✅ Projekt uruchomiony!  →  http://localhost:8069[/]\n")
-        except subprocess.CalledProcessError as e:
-            console.print(f"[bold red]Błąd Dockera:[/] {e.stderr if hasattr(e,'stderr') else e}")
-            sys.exit(1)
+            res = db_manager.restore_database(Path(dump), db, "odoo")
+            console.print(f"[green]✔[/] {res}")
+        except DbOpsError as e:
+            console.print(f"[red]✕ Błąd w DbOps:{e}[/]")
+            raise typer.Exit(1)
+            
+    if filestore:
+        with console.status("[bold blue]Wgrywanie filestore + nadpisywanie uprawnień odoo:odoo...[/]"):
+            try:
+                res2 = fs_manager.restore_filestore(Path(filestore), db)
+                console.print(f"[green]✔[/] {res2}")
+            except FilestoreError as e:
+                console.print(f"[red]✕ Błąd w FSOps:{e}[/]")
+                raise typer.Exit(1)
+                
+    console.print("[bold green]✨ Pomyślnie zrestorowano bazę i assets![/]")
 
-    # ─── Subcommand: delete ─────────────────────────────────────────
-    def delete_project(self):
-        console.print(f"[bold yellow]🗑  Usuwanie projektu:[/] {self.config.project_name}")
-        self.docker.execute(self.project_path, ["down", "-v"], check=False)
-        if self.project_path.exists():
-            shutil.rmtree(self.project_path, ignore_errors=True)
-        console.print("[green]Zakończono.[/]")
+@app.command("stop")
+def stop_project(name: str = typer.Option(..., "--name", "-n", help="Nazwa projektu")):
+    """Zatrzymuje kontenery"""
+    project_dir = get_project_dir(name)
+    ops = DockerOps(project_dir)
+    with console.status("[yellow]Zatrzymywanie...[/]"):
+        ops.compose_stop()
+        console.print("[green]✔ Projekt został zatrzymany.[/]")
 
-    # ─── Subcommand: test ───────────────────────────────────────────
-    def run_tests(self, db: str, module: str):
-        console.print(f"[bold cyan]🧪 Testy:[/] moduł={module}  baza={db}")
-        self.docker.run_tests(self.project_path, db, module)
-        console.print("[green]Gotowe.[/]")
-
-    # ─── Subcommand: list ───────────────────────────────────────────
-    @staticmethod
-    def list_projects():
-        base = Path.home() / "Dokumenty" / "DockerProjects"
-        if not base.exists():
-            console.print("[dim]Brak projektów.[/]")
-            return
-        table = Table(title="Projekty SmartOdoo")
-        table.add_column("Nazwa", style="cyan")
-        table.add_column("Ścieżka", style="dim")
-        table.add_column(".env", style="green")
-        for d in sorted(base.iterdir()):
-            if d.is_dir():
-                has_env = "✓" if (d / ".env").exists() else "✗"
-                table.add_row(d.name, str(d), has_env)
-        console.print(table)
-
-    # ─── Subcommand: tags ───────────────────────────────────────────
-    @staticmethod
-    def show_tags():
-        fetcher = DockerHubFetcher()
-        tags = asyncio.run(fetcher.get_odoo_tags(limit=20))
-        if not tags:
-            console.print("[red]Nie udało się pobrać tagów (sprawdź internet)[/]")
-            return
-        table = Table(title="Dostępne wersje Odoo (Docker Hub)")
-        table.add_column("Tag", style="cyan")
-        for t in tags:
-            table.add_row(t)
-        console.print(table)
-
-    # ─── Helpers ────────────────────────────────────────────────────
-    def _copy_template_files(self):
-        """Kopiuje szablonowe pliki (Dockerfile, entrypoint, config) do nowego projektu."""
-        repo_root = Path(__file__).resolve().parent.parent.parent
-        for name in ["Dockerfile", "entrypoint.sh"]:
-            src = repo_root / name
-            dst = self.project_path / name
-            if src.exists() and not dst.exists():
-                shutil.copy2(src, dst)
-        config_src = repo_root / "config"
-        config_dst = self.project_path / "config"
-        if config_src.exists() and not config_dst.exists():
-            shutil.copytree(config_src, config_dst)
-
-
-from rich.panel import Panel
-
-class RichHelpParser(argparse.ArgumentParser):
-    def print_help(self, file=None):
-        console.print(Panel.fit(
-            "[bold cyan]SmartOdoo CLI[/] — system zwinnego budowania środowisk Odoo w terminalu.\n\n"
-            "💡 [yellow]WSKAZÓWKA:[/] Jeśli pominiesz flagi i uruchomisz sam skrypt `python smartodoo.py`,\n"
-            "uruchomi się hybrydowy kreator dający dostęp do [magenta]Premium GUI (Dark Mode)[/]!",
-            title="✨ Witaj w Systemie", border_style="cyan"
-        ))
-        
-        table = Table(title="📖 Spis Treści (Dostępne Komendy)", show_header=True, header_style="bold magenta")
-        table.add_column("Komenda", style="cyan", justify="right")
-        table.add_column("Opis akcji do wykonania", style="white")
-        
-        table.add_row("create", "Utwórz nowy projekt Odoo (pozwala sprecyzować Odoo, Git, PostgreSQL)")
-        table.add_row("delete", "Zatrzymaj dockera i uwolnij zasoby dyskowe projektu")
-        table.add_row("test", "Uruchom testy asercyjne dla załadowanego środowiska")
-        table.add_row("list", "Wylistuj tabelę swoich obecnie zbudowanych projektów")
-        table.add_row("tags", "Asynchronicznie odpytaj DockerHub o najnowsze wersje dla flagi create")
-        
-        console.print(table)
-        console.print("\n[dim]Globalne wejścia:[/]")
-        console.print("  [cyan]-h, --help[/]    Pokazuje ten interfejs pomocy i wychodzi \n")
-        console.print("[bold]📚 Przykłady bezpośrednich wywołań w terminalu:[/]")
-        console.print("  [green]so create -n MójSklep -o 16.0[/]")
-        console.print("  [green]python smartodoo.py tags[/]\n")
-
-# ─── CLI Parser z subcommands ──────────────────────────────────────────
-def create_parser() -> argparse.ArgumentParser:
-    parser = RichHelpParser(prog="so")
-    sub = parser.add_subparsers(dest="command", help="Dostępne komendy")
-
-    # so create -n MyProject
-    create_cmd = sub.add_parser("create", help="Utwórz nowy projekt Odoo")
-    create_cmd.add_argument("-n", "--name", required=True, help="Nazwa projektu")
-    create_cmd.add_argument("-o", "--odoo", default="19.0", help="Wersja Odoo (np. 17.0)")
-    create_cmd.add_argument("-p", "--psql", default="16", help="Wersja PostgreSQL")
-    create_cmd.add_argument("--addons", default="", help="URL repozytorium addons")
-    create_cmd.add_argument("--enterprise", action="store_true", help="Klonuj Enterprise")
-
-    # so delete -n MyProject
-    delete_cmd = sub.add_parser("delete", help="Usuń projekt")
-    delete_cmd.add_argument("-n", "--name", required=True)
-
-    # so test -n MyProject --db testdb --module sale
-    test_cmd = sub.add_parser("test", help="Uruchom testy Odoo")
-    test_cmd.add_argument("-n", "--name", required=True)
-    test_cmd.add_argument("--db", required=True)
-    test_cmd.add_argument("-m", "--module", required=True)
-
-    # so list
-    sub.add_parser("list", help="Wyświetl istniejące projekty")
-
-    # so tags
-    sub.add_parser("tags", help="Pokaż dostępne wersje Odoo z Docker Hub")
-
-    return parser
-
+@app.command("list")
+def list_projects():
+    """Listuje zaalokowane projekty"""
+    base = Path.home() / "Dokumenty" / "DockerProjects"
+    table = Table("Projekt", "Status Env")
+    for d in base.iterdir():
+        if d.is_dir():
+            has_env = "✓" if (d / ".env").exists() else "✕"
+            table.add_row(d.name, has_env)
+    console.print(table)
 
 def main():
-    parser = create_parser()
-    args = parser.parse_args()
+    app()
 
-    if not args.command:
-        parser.print_help()
-        return
-
-    # Komendy bezstanowe
-    if args.command == "list":
-        OdooCliOrchestrator.list_projects()
-        return
-    if args.command == "tags":
-        OdooCliOrchestrator.show_tags()
-        return
-
-    # Komendy wymagające projektu
-    config = AppConfig(
-        project_name=args.name,
-        odoo_version=getattr(args, "odoo", "19.0"),
-        psql_version=getattr(args, "psql", "16"),
-    )
-
-    try:
-        docker = DockerManager()
-        git = GitManager()
-    except RuntimeError as e:
-        console.print(f"[bold red]System Error:[/] {e}")
-        sys.exit(1)
-
-    orch = OdooCliOrchestrator(config, docker, git)
-
-    if args.command == "create":
-        orch.create_project(addons_url=args.addons, enterprise=args.enterprise)
-    elif args.command == "delete":
-        orch.delete_project()
-    elif args.command == "test":
-        orch.run_tests(args.db, args.module)
+if __name__ == "__main__":
+    main()

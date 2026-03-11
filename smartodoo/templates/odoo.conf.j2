@@ -1,0 +1,16 @@
+[options]
+addons_path = /mnt/extra-addons,/mnt/enterprise
+admin_passwd = admin
+data_dir = /var/lib/odoo
+db_host = db
+db_name = {{ config.PSQL_DB_NAME }}
+db_password = {{ config.PSQL_DB_PASSWORD }}
+db_user = {{ config.PSQL_DB_USERNAME }}
+db_port = 5432
+limit_time_cpu = 6000
+limit_time_real = 12000
+smtp_password = False
+smtp_port = 25
+smtp_server = smtp4dev_odoo
+smtp_ssl = False
+smtp_user = False

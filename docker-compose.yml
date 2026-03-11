@@ -25,8 +25,14 @@ services:
       - ${ENTERPRISE_LOCATION}:/mnt/enterprise
     restart: on-failure
   db:
-    image: postgres:${PSQL_VER}
+    image: pgvector/pgvector:pg${PSQL_VER}
     container_name: ${PSQL_CONT_NAME}
+    command: >
+      postgres
+      -c autovacuum_vacuum_scale_factor=0.05
+      -c autovacuum_analyze_scale_factor=0.02
+      -c autovacuum_max_workers=3
+      -c lock_timeout=5000
     environment:
       - POSTGRES_DB=postgres
       - POSTGRES_PASSWORD=odoo

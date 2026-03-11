@@ -1,4 +1,4 @@
-﻿# 🗺️ ROADMAP — Smart_odoo
+# 🗺️ ROADMAP — Smart_odoo
 > **Status:** Aktywna | **Ostatnia aktualizacja:** 2026-03-05
 > **Właściciel:** /so + /arch
 
@@ -51,6 +51,15 @@ Sprinty ZAWSZE odnoszą się do jednego z celów poniżej. Jeśli tworzysz nowy 
 
 ---
 
+### 🐳 CEL 4: Docker Odoo Infrastructure Stability
+> **Priorytet:** P0 | **Status:** 🟡 In Progress
+
+| Co? | Sprint | Status |
+|-----|--------|--------|
+| pgvector fix + autovacuum tuning | [PM-02](../sprints/2026-03-11_PM-02_Docker_Odoo_RCA_sprint.md) | 🟡 In Progress |
+
+---
+
 ## 📊 PODSUMOWANIE POSTĘPU
 
 | Cel | Status | Sprinty |
@@ -58,6 +67,7 @@ Sprinty ZAWSZE odnoszą się do jednego z celów poniżej. Jeśli tworzysz nowy 
 | TeamEngine | 🟡 In Progress | (pre-sprint) |
 | [Cel 2] | 🔴 Backlog | — |
 | Scyzoryk API | 🔴 Backlog | — |
+| Docker Odoo Infrastructure | 🟡 In Progress | PM-02 |
 
 ---
 📅 *Utworzono: 2026-03-05 | Właściciel: /so*
