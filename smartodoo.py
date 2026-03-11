@@ -489,9 +489,10 @@ def enterprise_link_compose() -> str:
 def clone_addons(project_fullpath: Path, addons_clone_url: Optional[str], branch_name: Optional[str]) -> None:
     """Clone addons repository or create placeholder requirements file."""
     if addons_clone_url:
-        cmd = ["git", "-C", str(project_fullpath), "clone", addons_clone_url]
+        cmd = ["git", "-C", str(project_fullpath), "clone"]
         if branch_name:
             cmd.extend(["--branch", branch_name])
+        cmd.append(addons_clone_url)
         cmd.append("addons")
         run(cmd)
     else:
@@ -504,11 +505,35 @@ def clone_enterprise(odoo_ver: str, install_enterprise_modules: bool) -> None:
         return
     enterprise_clone_url = enterprise_link_compose()
     target = ENTERPRISE_LOCATION / odoo_ver
-    if not target.exists():
+
+    def clone_fresh() -> None:
         target.mkdir(parents=True, exist_ok=True)
-        run(["git", "-C", str(target), "clone", "--depth", "1", enterprise_clone_url, "--branch", odoo_ver, "."])
+        run([
+            "git",
+            "-C",
+            str(target),
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            odoo_ver,
+            enterprise_clone_url,
+            ".",
+        ])
+
+    if not target.exists():
+        clone_fresh()
+        return
+
+    if (target / ".git").exists():
+        run(["git", "-C", str(target), "pull", "--ff-only"])
+        return
+
+    has_files = any(target.iterdir())
+    if has_files:
+        eprint(f"enterprise/{odoo_ver} exists and is not a git repository. Using existing files.")
     else:
-        run(["git", "-C", str(target), "pull"])
+        clone_fresh()
 
 
 def get_upgrade_util() -> None:
