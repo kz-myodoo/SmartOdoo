@@ -8,14 +8,17 @@ services:
         - ODOO_REVISION={{ config.ODOO_REVISION }}
     container_name: {{ config.ODOO_CONT_NAME }}
     depends_on:
-      - db
-      - smtp4dev
+      db:
+        condition: service_healthy
+      smtp4dev:
+        condition: service_started
     ports:
-      - "8069:8069"
+      - "${ODOO_HOST_PORT:-8069}:8069"
       - "5858:5858"
     command: /usr/bin/python3 -m debugpy --listen 0.0.0.0:5858 /usr/bin/odoo --db_host=db -c /etc/odoo/odoo.conf --dev reload
     tty: true
     volumes:
+      - odoo-filestore:/var/lib/odoo
       - {{ config.PROJECT_LOCATION }}/entrypoint.sh:/entrypoint.sh
       - {{ config.PROJECT_LOCATION }}/config:/etc/odoo
       - {{ config.PROJECT_LOCATION }}/addons:/mnt/extra-addons
@@ -26,6 +29,11 @@ services:
   db:
     image: pgvector/pgvector:pg{{ config.PSQL_VER }}
     container_name: {{ config.PSQL_CONT_NAME }}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ config.PSQL_DB_USERNAME }}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     command: >
       postgres
       -c autovacuum_vacuum_scale_factor=0.05
@@ -40,7 +48,7 @@ services:
     volumes:
       - {{ config.PROJECT_LOCATION }}/psql:/var/lib/postgresql/data/pgdata
     ports:
-      - "5432:5432"
+      - "${DB_HOST_PORT:-5432}:5432"
 
   smtp4dev:
     image: rnwood/smtp4dev:latest
@@ -51,3 +59,6 @@ services:
       - "143:143"
     hostname: smtp4dev_odoo
     restart: on-failure
+
+volumes:
+  odoo-filestore:

@@ -12,6 +12,7 @@ from smartodoo.core.docker_ops import DockerOps, DockerOpsError
 from smartodoo.core.db_ops import DbOps, DbOpsError
 from smartodoo.core.filestore import FilestoreManager, FilestoreError
 from smartodoo.core.docker_hub import DockerHubFetcher
+from smartodoo.core.health_check import HealthChecker
 
 app = typer.Typer(name="so", help="Narzędzie CLI do zarządzania środowiskami SmartOdoo", no_args_is_help=True)
 console = Console()
@@ -36,8 +37,6 @@ def create_project(
     
     with console.status("[bold green]Generowanie środowiska...[/]"):
         env_builder.write_env()
-        # docker-compose template is filled in reality by some templates folder or string
-        # Tutaj wywołalibyśmy env_builder.write_docker_compose z poprawnym szablonem
         console.print("[green]✔[/] Wygenerowano .env i strukturę projektu.")
         
     ops = DockerOps(project_dir)
@@ -51,21 +50,36 @@ def create_project(
 def restore_project(
     name: str = typer.Option(..., "--name", "-n", help="Nazwa projektu do którego wprowadzamy backup"),
     dump: str = typer.Option(..., "--dump", help="Ścieżka do dump.sql zrzutu z innej bazy"),
-    filestore: str = typer.Option(None, "--filestore", help="Ścieżka do katalogu filestore (opcjonalnie)"),
-    db: str = typer.Option("odoo", "--db", help="Docelowa nazwa bazy do stworzenia")
+    filestore: str = typer.Option(None, "--filestore", help="Ścieżka do katalogu filestore. WYMAGANE przy pełnym restore!"),
+    db: str = typer.Option("odoo", "--db", help="Docelowa nazwa bazy do stworzenia"),
+    skip_filestore: bool = typer.Option(False, "--skip-filestore", help="Świadomie pomijam filestore (NIE ZALECANE)")
 ):
-    """Przywraca zrzucona bazę SQL do pracującego postgresa i opcjonalnie odtwarza asety filestore."""
+    """Przywraca zrzuconą bazę SQL do pracującego postgresa i odtwarza filestore (wymagane!)."""
     project_dir = get_project_dir(name)
     if not project_dir.exists():
         console.print(f"[bold red]Rozszerzenie nie istnieje. Projekt {name} jest nieosiągalny![/]")
         raise typer.Exit(1)
+    
+    # === POSTMORTEM FIX: Filestore MUSI być podany ===
+    if not filestore and not skip_filestore:
+        console.print(Panel(
+            "[bold red]⚠ BRAK FILESTORE![/bold red]\n\n"
+            "Restore BEZ filestore = [yellow]500 Internal Server Error[/] na web assets.\n"
+            "Tabela ir_attachment będzie referencjować pliki, które nie istnieją.\n\n"
+            "[dim]Użyj:[/]\n"
+            "  --filestore <ścieżka>     podaj katalog filestore\n"
+            "  --skip-filestore          pomiń świadomie (NIE ZALECANE)",
+            title="🔥 Filestore Required", border_style="red"
+        ))
+        raise typer.Exit(1)
+    
+    if skip_filestore:
+        console.print("[bold yellow]⚠ Pomijasz filestore — web assets mogą nie działać![/]")
         
     console.print(f"[bold yellow]Rozpoczynanie rutyny Restore dla projektu [white]{name}[/] -> Baza: [white]{db}[/]...[/]")
     
     ops = DockerOps(project_dir)
     
-    # Próbujemy znaleźć faktyczne nazwy kontenerów dla Dockera (zazwyczaj <project>_db_1 etc., tu używamy patternów)
-    # W pełnej implementacji nazwy kontenerów pochodziły by z AppConfig/z baz.
     db_cont = f"{name}_db_1"
     odoo_cont = f"{name}_web_1"
     
@@ -90,6 +104,44 @@ def restore_project(
                 raise typer.Exit(1)
                 
     console.print("[bold green]✨ Pomyślnie zrestorowano bazę i assets![/]")
+
+@app.command("diagnose")
+def diagnose_project(
+    name: str = typer.Option(..., "--name", "-n", help="Nazwa projektu"),
+    db: str = typer.Option("odoo", "--db", help="Nazwa bazy do sprawdzenia"),
+    db_port: int = typer.Option(5432, "--db-port", help="Port hosta mapowany na PostgreSQL"),
+    odoo_port: int = typer.Option(8069, "--odoo-port", help="Port hosta mapowany na Odoo")
+):
+    """Uruchamia pełną diagnostykę środowiska — sieć, porty, registry, filestore."""
+    project_dir = get_project_dir(name)
+    if not project_dir.exists():
+        console.print(f"[bold red]Projekt {name} nie istnieje![/]")
+        raise typer.Exit(1)
+    
+    ops = DockerOps(project_dir)
+    odoo_cont = f"{name}_web_1"
+    db_cont = f"{name}_db_1"
+    
+    checker = HealthChecker(ops, odoo_cont, db_cont)
+    
+    console.print(Panel(f"[bold cyan]🔍 Diagnostyka projektu {name}[/]", border_style="cyan"))
+    
+    with console.status("[bold green]Uruchamianie 4 checków zdrowia...[/]"):
+        report = checker.run_all(db_name=db, ports=[db_port, odoo_port])
+    
+    table = Table("Check", "Status", "Szczegóły")
+    for check in report.checks:
+        icon = "✔" if check.passed else "✕"
+        color = "green" if check.passed else "red"
+        table.add_row(check.name, f"[{color}]{icon}[/]", check.detail)
+    
+    console.print(table)
+    
+    if report.all_passed:
+        console.print(f"\n[bold green]✨ Wszystkie checki przeszły! ({report.summary()})[/]")
+    else:
+        console.print(f"\n[bold red]⚠ Wykryto problemy! ({report.summary()})[/]")
+        raise typer.Exit(1)
 
 @app.command("stop")
 def stop_project(name: str = typer.Option(..., "--name", "-n", help="Nazwa projektu")):
