@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 from pathlib import Path
@@ -23,7 +21,11 @@ def resolve_config_path(raw_value: str, *, base_dir: Path) -> Path:
 
 def load_platform_paths(*, root_dir: Path) -> PlatformPaths:
     """Load required platform-specific paths from config.json in root_dir."""
-    config_path = root_dir / "config.json"
+    config_path = root_dir / "config" / "config.json"
+    if not config_path.exists():
+        legacy_config_path = root_dir / "config.json"
+        if legacy_config_path.exists():
+            config_path = legacy_config_path
     if not config_path.exists():
         raise RuntimeError(f"Missing required config file: {config_path}")
 

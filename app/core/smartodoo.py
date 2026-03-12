@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import argparse
 import json
@@ -8,24 +7,27 @@ import re
 import shutil
 import subprocess
 import sys
-from urllib.request import urlopen
 from pathlib import Path
 from typing import Any, Optional
+from urllib.request import urlopen
 
-from tools import load_platform_paths
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
-ROOT = Path(__file__).resolve().parent
+from app.core.tools import load_platform_paths  # noqa: E402  # isort: skip
+
+
 ENV_FILE = ROOT / ".env"
 CONFIG_DIR = ROOT / "config"
-DOCKERFILE = ROOT / "Dockerfile"
-DOCKERIGNORE = ROOT / ".dockerignore"
-DOCKER_COMPOSE = ROOT / "docker-compose.yml"
-ENTRYPOINT = ROOT / "entrypoint.sh"
-LAUNCH_JSON = ROOT / "launch.json"
-ENCPASS = ROOT / "encpass.sh"
-ENCPASS_BUCKET = "smartodoo"
+DOCKERFILE = ROOT / "docker" / "Dockerfile"
+DOCKERIGNORE = ROOT / "docker" / ".dockerignore"
+DOCKER_COMPOSE = ROOT / "docker" / "docker-compose.yml"
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
+LAUNCH_JSON = ROOT / ".vscode" / "launch.json"
+ENCPASS = ROOT / "scripts" / "encpass.sh"
 WINDOWS_SECRET_DIR = ROOT / "secret"
-
 
 ODOO_VER = "19.0"
 PSQL_VER = "16"
@@ -33,9 +35,23 @@ ODOO_REVISION = ""
 ODOO_GITHUB_NAME = "odoo"
 ODOO_ENTERPRISE_REPOSITORY = "enterprise"
 UPGRADE_UTIL_REPOSITORY = "git@github.com:odoo/upgrade-util.git"
-IS_WINDOWS = os.name == "nt"
-ALLOW_STDIN_PROMPTS_ENV = "SMARTODOO_ALLOW_STDIN_PROMPTS"
-GUI_MODE_ENV = "SMARTODOO_GUI_MODE"
+
+IS_WINDOWS = sys.platform.startswith("win")
+
+if IS_WINDOWS:
+    from app.platform.windows.env_paths import normalize_project_env_paths, to_compose_path
+    from app.platform.windows.passwd import get_secret as platform_get_secret
+    from app.platform.windows.privileged_ops import try_delete_with_admin as platform_try_delete_with_admin
+    from app.platform.windows.process import run as platform_run
+else:
+    from app.platform.linux.env_paths import to_compose_path
+    from app.platform.linux.passwd import get_secret as platform_get_secret
+    from app.platform.linux.privileged_ops import try_delete_with_admin as platform_try_delete_with_admin
+    from app.platform.linux.process import run as platform_run
+
+    def normalize_project_env_paths(_project_fullpath: Path) -> None:
+        """Linux adapter: no path normalization is required for .env values."""
+        return
 
 
 def eprint(msg: str) -> None:
@@ -49,23 +65,9 @@ ENTERPRISE_LOCATION = PLATFORM_PATHS["ENTERPRISE_LOCATION"]
 UPGRADE_UTIL_LOCATION = PLATFORM_PATHS["UPGRADE_UTIL_LOCATION"]
 
 
-def _windows_hidden_subprocess_kwargs() -> dict[str, Any]:
-    """Hide Windows console windows for child processes when running from GUI mode."""
-    if not IS_WINDOWS or os.getenv(GUI_MODE_ENV) != "1":
-        return {}
-
-    kwargs: dict[str, Any] = {}
-    create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    if create_no_window:
-        kwargs["creationflags"] = create_no_window
-
-    startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
-    if startupinfo_cls is not None:
-        startupinfo = startupinfo_cls()
-        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-        kwargs["startupinfo"] = startupinfo
-    return kwargs
+def ensure_workspace_layout() -> None:
+    """Create required base directories lazily if they are missing."""
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def run(
@@ -76,32 +78,12 @@ def run(
     env: Optional[dict[str, str]] = None,
     stdin: Any = None,
 ) -> subprocess.CompletedProcess:
-    """Run a subprocess command with common defaults."""
-    run_kwargs: dict[str, Any] = {
-        "cwd": str(cwd) if cwd else None,
-        "text": True,
-        "check": check,
-        "capture_output": capture_output,
-        "env": env,
-        **_windows_hidden_subprocess_kwargs(),
-    }
-
-    if stdin is not None:
-        run_kwargs["stdin"] = stdin
-
-    # On Windows GUI mode (pythonw), explicit forwarding keeps child process logs visible
-    # in SmartOdoo GUI output instead of disappearing due to missing console handles.
-    if IS_WINDOWS and os.getenv(GUI_MODE_ENV) == "1" and not capture_output:
-        if sys.stdout is not None:
-            run_kwargs["stdout"] = sys.stdout
-        if sys.stderr is not None:
-            run_kwargs["stderr"] = sys.stderr
-
-    return subprocess.run(cmd, **run_kwargs)
+    """Run a subprocess command using platform-specific behavior."""
+    return platform_run(cmd, cwd=cwd, check=check, capture_output=capture_output, env=env, stdin=stdin)
 
 
 def detect_compose_base() -> list[str]:
-    """Detect whether Docker Compose should be called via plugin or legacy binary."""
+    """Detect whether Docker Compose should use plugin or legacy binary."""
     docker_path = shutil.which("docker")
     if docker_path:
         test = run([docker_path, "compose", "version"], capture_output=True, check=False)
@@ -117,7 +99,7 @@ COMPOSE_BASE = detect_compose_base()
 
 
 def run_compose(project_path: Path, compose_args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """Run a docker compose command in the selected project directory."""
+    """Run a docker compose command inside the selected project directory."""
     return run(COMPOSE_BASE + compose_args, cwd=project_path, check=check)
 
 
@@ -156,7 +138,7 @@ def fetch_psql_docker_tags(page_size: int = 100) -> list[dict[str, str | int | N
 
 
 def read_text(path: Path) -> str:
-    """Read a UTF-8 text file and return its content."""
+    """Read UTF-8 text content from a file."""
     return path.read_text(encoding="utf-8")
 
 
@@ -166,7 +148,7 @@ def write_text(path: Path, content: str) -> None:
 
 
 def write_text_lf(path: Path, content: str) -> None:
-    """Write UTF-8 text content with Unix LF line endings."""
+    """Write UTF-8 text content using LF line endings."""
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(content)
 
@@ -183,12 +165,6 @@ def replace_line(content: str, key: str, value: str) -> str:
     pattern = rf"^{re.escape(key)}=.*$"
     replacement = f"{key}={value}"
     return re.sub(pattern, lambda _match: replacement, content, flags=re.MULTILINE)
-
-
-def to_compose_path(value: Path | str) -> str:
-    """Format host path for Docker Compose environment variables."""
-    raw = str(value)
-    return raw.replace("\\", "/") if IS_WINDOWS else raw
 
 
 def customize_env(project_name: str, project_fullpath: Path, odoo_ver: str, psql_ver: str) -> None:
@@ -212,29 +188,6 @@ def customize_env(project_name: str, project_fullpath: Path, odoo_ver: str, psql
     print(content)
 
 
-def normalize_project_env_paths(project_fullpath: Path) -> None:
-    """Normalize path-like keys in project .env to Docker-friendly path format."""
-    if not IS_WINDOWS:
-        return
-
-    env_path = project_fullpath / ".env"
-    if not env_path.exists():
-        return
-
-    content = read_text(env_path)
-    keys = ("PROJECT_LOCATION", "ENTERPRISE_LOCATION", "UPGRADE_UTIL_LOCATION")
-
-    for key in keys:
-        match = re.search(rf"^{re.escape(key)}=(.*)$", content, flags=re.MULTILINE)
-        if not match:
-            continue
-        value = match.group(1).strip()
-        normalized = to_compose_path(value)
-        content = replace_line(content, key, normalized)
-
-    write_text(env_path, content)
-
-
 def standarize_env() -> None:
     """Restore .env template values to defaults."""
     content = read_text(ENV_FILE)
@@ -252,215 +205,14 @@ def standarize_env() -> None:
 
 
 def get_secret(secret_name: str) -> str:
-    """Resolve a secret from environment variables or encpass."""
-    env_key = secret_name.upper()
-    env_value = os.getenv(env_key)
-
+    """Resolve a secret using platform-specific storage backends."""
     if IS_WINDOWS:
-        windows_value = get_windows_secret(secret_name, env_value)
-        if windows_value:
-            return windows_value
-
-        if env_value:
-            return env_value
-
-        raise RuntimeError(
-            f"Missing secret '{secret_name}'. Set env var '{env_key}' or configure Windows secret files in '{WINDOWS_SECRET_DIR}'."
-        )
-
-    bash_path = shutil.which("bash")
-    if not IS_WINDOWS and ENCPASS.exists() and bash_path:
-        show_result = run(
-            [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
-            capture_output=True,
-            check=False,
-        )
-        if show_result.returncode == 0:
-            value = show_result.stdout.strip()
-            if value and value != "**Locked**":
-                return value
-
-        allow_stdin_prompts = os.getenv(ALLOW_STDIN_PROMPTS_ENV) == "1"
-        if sys.stdin.isatty() or allow_stdin_prompts:
-            print(f"Secret '{secret_name}' not found in bucket '{ENCPASS_BUCKET}'.")
-            print("Adding secret interactively...")
-            add_result = run(
-                [str(ENCPASS), "add", "-f", ENCPASS_BUCKET, secret_name],
-                check=False,
-            )
-            verify_result = run(
-                [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
-                capture_output=True,
-                check=False,
-            )
-            value = verify_result.stdout.strip()
-            if verify_result.returncode == 0 and value and value != "**Locked**":
-                return value
-
-            raise RuntimeError(
-                f"Failed to add secret '{secret_name}' to bucket '{ENCPASS_BUCKET}' "
-                f"(encpass add exit code: {add_result.returncode})."
-            )
-
-        if env_value:
-            add_env = dict(os.environ)
-            add_env["ENCPASS_SECRET_INPUT"] = env_value
-            add_env["ENCPASS_CSECRET_INPUT"] = env_value
-
-            add_result = run(
-                [str(ENCPASS), "add", "-f", ENCPASS_BUCKET, secret_name],
-                capture_output=True,
-                check=False,
-                env=add_env,
-                stdin=subprocess.DEVNULL,
-            )
-            if add_result.returncode == 0:
-                verify_result = run(
-                    [str(ENCPASS), "show", ENCPASS_BUCKET, secret_name],
-                    capture_output=True,
-                    check=False,
-                )
-                value = verify_result.stdout.strip()
-                if verify_result.returncode == 0 and value and value != "**Locked**":
-                    return value
-
-            return env_value
-
-        error_details = show_result.stderr.strip() or "no details"
-        raise RuntimeError(
-            f"Missing secret '{secret_name}' in bucket '{ENCPASS_BUCKET}'. "
-            f"Interactive add requires terminal input (TTY) or {ALLOW_STDIN_PROMPTS_ENV}=1. "
-            f"Details: {error_details}"
-        )
-
-    if env_value:
-        return env_value
-
-    raise RuntimeError(
-        f"Missing secret '{secret_name}'. Set env var '{env_key}' or configure encpass.sh (Linux/macOS)."
-    )
-
-
-def get_windows_secret(secret_name: str, env_value: Optional[str]) -> Optional[str]:
-    """Resolve secret on Windows from legacy CliXml files or create them via Get-Credential."""
-    if not IS_WINDOWS:
-        return None
-
-    secret_specs: dict[str, tuple[str, str]] = {
-        "github_addons_token": ("git_addons.xml", "Provide login and token for YOUR github account."),
-        "github_enterprise_token": ("git_ent.xml", "Provide login and token for COMPANY github account."),
-    }
-    spec = secret_specs.get(secret_name)
-    if not spec:
-        return env_value
-
-    file_name, prompt_message = spec
-    secret_file = WINDOWS_SECRET_DIR / file_name
-
-    loaded_value = load_windows_credential_token(secret_file)
-    if loaded_value:
-        return loaded_value
-
-    if env_value:
-        save_windows_credential_token(secret_file, env_value, username="token")
-        return env_value
-
-    allow_stdin_prompts = os.getenv(ALLOW_STDIN_PROMPTS_ENV) == "1"
-    if not (sys.stdin.isatty() or allow_stdin_prompts):
-        return None
-
-    return prompt_windows_credential_token(secret_file, prompt_message)
-
-
-def find_powershell() -> Optional[str]:
-    """Find a PowerShell executable (pwsh preferred, fallback to Windows PowerShell)."""
-    return shutil.which("pwsh") or shutil.which("powershell")
-
-
-def _escape_ps_single_quoted(value: str) -> str:
-    """Escape a string for PowerShell single-quoted literals."""
-    return value.replace("'", "''")
-
-
-def _ensure_hidden_secret_dir() -> None:
-    """Create Windows secret directory and mark it hidden."""
-    WINDOWS_SECRET_DIR.mkdir(parents=True, exist_ok=True)
-    run(["attrib", "+h", str(WINDOWS_SECRET_DIR)], check=False)
-
-
-def load_windows_credential_token(secret_file: Path) -> Optional[str]:
-    """Read token from a legacy PowerShell CliXml credential file."""
-    if not secret_file.exists():
-        return None
-
-    powershell = find_powershell()
-    if not powershell:
-        return None
-
-    path_escaped = _escape_ps_single_quoted(str(secret_file))
-    script = (
-        f"$cred = Import-Clixml -Path '{path_escaped}'; "
-        "if ($null -eq $cred) { exit 1 }; "
-        "$pwd = $cred.GetNetworkCredential().Password; "
-        "if ([string]::IsNullOrWhiteSpace($pwd)) { exit 1 }; "
-        "Write-Output $pwd"
-    )
-    result = run([powershell, "-NoProfile", "-Command", script], check=False, capture_output=True)
-    if result.returncode != 0:
-        return None
-
-    value = result.stdout.strip()
-    return value or None
-
-
-def save_windows_credential_token(secret_file: Path, token: str, username: str = "token") -> None:
-    """Persist token into a legacy PowerShell CliXml credential file."""
-    powershell = find_powershell()
-    if not powershell:
-        return
-
-    _ensure_hidden_secret_dir()
-    token_escaped = _escape_ps_single_quoted(token)
-    username_escaped = _escape_ps_single_quoted(username)
-    path_escaped = _escape_ps_single_quoted(str(secret_file))
-    script = (
-        f"$secure = ConvertTo-SecureString '{token_escaped}' -AsPlainText -Force; "
-        f"$cred = New-Object System.Management.Automation.PSCredential('{username_escaped}', $secure); "
-        f"$cred | Export-Clixml -Path '{path_escaped}'"
-    )
-    run([powershell, "-NoProfile", "-Command", script], check=False)
-
-
-def prompt_windows_credential_token(secret_file: Path, prompt_message: str) -> str:
-    """Prompt for credentials on Windows and persist token to CliXml file."""
-    powershell = find_powershell()
-    if not powershell:
-        raise RuntimeError("PowerShell is required to manage secrets on Windows.")
-
-    _ensure_hidden_secret_dir()
-    path_escaped = _escape_ps_single_quoted(str(secret_file))
-    prompt_escaped = _escape_ps_single_quoted(prompt_message)
-    script = (
-        f"$cred = Get-Credential -Message '{prompt_escaped}'; "
-        "if ($null -eq $cred) { exit 1 }; "
-        "$pwd = $cred.GetNetworkCredential().Password; "
-        "if ([string]::IsNullOrWhiteSpace($pwd)) { exit 1 }; "
-        f"$cred | Export-Clixml -Path '{path_escaped}'; "
-        "Write-Output $pwd"
-    )
-    result = run([powershell, "-NoProfile", "-Command", script], check=False, capture_output=True)
-    if result.returncode != 0:
-        error_details = result.stderr.strip() or "no details"
-        raise RuntimeError(f"Failed to capture Windows credential secret. Details: {error_details}")
-
-    token = result.stdout.strip()
-    if not token:
-        raise RuntimeError("Failed to capture Windows credential secret (empty value).")
-    return token
+        return platform_get_secret(secret_name, WINDOWS_SECRET_DIR)
+    return platform_get_secret(secret_name, ENCPASS)
 
 
 def compose_exec_with_fallback(project_fullpath: Path, primary: list[str], fallback: list[str]) -> None:
-    """Run a compose command and retry with fallback arguments on failure."""
+    """Run compose command and retry with fallback args on failure."""
     result = run_compose(project_fullpath, primary, check=False)
     if result.returncode != 0:
         run_compose(project_fullpath, fallback, check=True)
@@ -507,6 +259,7 @@ def clone_enterprise(odoo_ver: str, install_enterprise_modules: bool) -> None:
     target = ENTERPRISE_LOCATION / odoo_ver
 
     def clone_fresh() -> None:
+        """Clone enterprise repository into target directory from scratch."""
         target.mkdir(parents=True, exist_ok=True)
         run([
             "git",
@@ -539,6 +292,7 @@ def clone_enterprise(odoo_ver: str, install_enterprise_modules: bool) -> None:
 def get_upgrade_util() -> None:
     """Clone or update the upgrade-util repository."""
     def clone_fresh() -> None:
+        """Clone upgrade-util repository into configured location from scratch."""
         UPGRADE_UTIL_LOCATION.mkdir(parents=True, exist_ok=True)
         run(["git", "-C", str(UPGRADE_UTIL_LOCATION), "clone", "--depth", "1", UPGRADE_UTIL_REPOSITORY, "."])
 
@@ -562,7 +316,7 @@ def get_upgrade_util() -> None:
 
 
 def _make_tree_writable(path: Path) -> None:
-    """Try to make directory tree writable to allow deletion."""
+    """Try to make a directory tree writable before deletion."""
     if not path.exists():
         return
     for root, dirs, files in os.walk(path, topdown=False):
@@ -584,25 +338,8 @@ def _make_tree_writable(path: Path) -> None:
 
 
 def _try_delete_with_admin(project_fullpath: Path) -> None:
-    """Attempt privileged deletion when standard deletion fails."""
-    if IS_WINDOWS:
-        powershell = shutil.which("powershell") or shutil.which("pwsh")
-        if powershell:
-            command = f'Start-Process cmd -Verb RunAs -WindowStyle Hidden -ArgumentList \'/c rmdir /s /q "{project_fullpath}"\' -Wait'
-            run([powershell, "-NoProfile", "-Command", command], check=False)
-        else:
-            run(["cmd", "/c", "rmdir", "/s", "/q", str(project_fullpath)], check=False)
-        return
-
-    pkexec_path = shutil.which("pkexec")
-    if pkexec_path and os.environ.get("DISPLAY"):
-        result = run([pkexec_path, "rm", "-rf", str(project_fullpath)], check=False)
-        if result.returncode == 0:
-            return
-
-    sudo_path = shutil.which("sudo")
-    if sudo_path:
-        run([sudo_path, "rm", "-rf", str(project_fullpath)], check=False)
+    """Attempt privileged deletion using platform-specific helper."""
+    platform_try_delete_with_admin(project_fullpath)
 
 
 def delete_project(project_fullpath: Path) -> None:
@@ -628,6 +365,7 @@ def delete_project(project_fullpath: Path) -> None:
 
 def run_with_upgrade(project_fullpath: Path) -> None:
     """Run Odoo container in upgrade-util mode."""
+    get_upgrade_util()
     run_compose(project_fullpath, ["stop", "web"], check=False)
     run_compose(
         project_fullpath,
@@ -709,6 +447,7 @@ def install_module(project_fullpath: Path, with_upgrade: bool, db: Optional[str]
         display_help("You need to specify database. Use --db")
     run_compose(project_fullpath, ["stop", "web"], check=False)
     if with_upgrade:
+        get_upgrade_util()
         run_compose(
             project_fullpath,
             [
@@ -807,6 +546,7 @@ def adjust_project_odoo_conf(project_fullpath: Path, install_enterprise_modules:
     pattern = r"^(addons_path\s*=\s*)(.+)$"
 
     def replace_addons_path(match: re.Match) -> str:
+        """Remove enterprise mount path from addons_path when enterprise is disabled."""
         prefix = match.group(1)
         paths = [part.strip() for part in match.group(2).split(",") if part.strip()]
         filtered = [path for path in paths if path != "/mnt/enterprise"]
@@ -824,7 +564,8 @@ def create_project(args: argparse.Namespace, project_fullpath: Path, addons_clon
     adjust_project_odoo_conf(project_fullpath, args.enterprise)
     clone_addons(project_fullpath, addons_clone_url, args.branch)
     clone_enterprise(args.odoo, args.enterprise)
-    get_upgrade_util()
+    if args.upgrade:
+        get_upgrade_util()
     shutil.copy2(ENV_FILE, project_fullpath / ".env")
     run_compose(project_fullpath, ["pull", "web"], check=False)
     run_compose(project_fullpath, ["pull", "db"], check=False)
@@ -839,7 +580,7 @@ def create_project(args: argparse.Namespace, project_fullpath: Path, addons_clon
 
 
 def check_odoo_version(value: str):
-    """Normalize Odoo version: add .0 if only digits, extract revision."""
+    """Normalize Odoo version: add .0 for digits and extract revision suffix."""
     global ODOO_VER, ODOO_REVISION
     if '-' in value:
         version, revision = value.split('-', 1)
@@ -940,8 +681,8 @@ def main() -> None:
 
     addons_clone_url = addons_link_compose(args.addons) if args.addons else None
 
+    ensure_workspace_layout()
     project_base = PROJECTS_DIR
-    project_base.mkdir(parents=True, exist_ok=True)
 
     project_fullpath = project_base / args.name
     if project_fullpath.exists():
