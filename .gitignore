@@ -2,8 +2,7 @@
 
 /secret
 /secret/*
-/enterprise/*
-/upgrade-util/*
+/enterprise
 /upgrade-util
 /odoo
 *.deb

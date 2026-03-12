@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
+import pygubu
 import json
 import os
 import queue
@@ -14,11 +14,25 @@ import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
-import pygubu
-from tools import load_platform_paths
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+from app.core.tools import load_platform_paths  # noqa: E402  # isort: skip
 
 
-ROOT = Path(__file__).resolve().parent
+IS_WINDOWS = sys.platform.startswith("win")
+if IS_WINDOWS:
+    from app.platform.windows.gui_platform import open_settings_file as platform_open_settings_file
+    from app.platform.windows.process import windows_hidden_subprocess_kwargs as platform_subprocess_kwargs
+else:
+    from app.platform.linux.gui_platform import open_settings_file as platform_open_settings_file
+
+    def platform_subprocess_kwargs() -> dict[str, object]:
+        return {}
+
+
 PLATFORM_PATHS = load_platform_paths(root_dir=ROOT)
 PROJECTS_DIR = PLATFORM_PATHS["PROJECTS_DIR"]
 
@@ -34,9 +48,9 @@ class SmartOdooUI(tk.Tk):
         self.bold_font = tkfont.nametofont("TkDefaultFont").copy()
         self.bold_font.configure(weight="bold")
 
-        self.script_path = Path(__file__).resolve().parent / "smartodoo.py"
-        self.view_path = Path(__file__).resolve().parent / "smartodoo_view.xml"
-        self.config_json_path = ROOT / "config.json"
+        self.script_path = SCRIPT_DIR / "smartodoo.py"
+        self.view_path = SCRIPT_DIR / "ui" / "smartodoo_view.xml"
+        self.config_json_path = ROOT / "config" / "config.json"
         self.odoo_conf_path = ROOT / "config" / "odoo.conf"
         self.projects_dir = PROJECTS_DIR
 
@@ -74,24 +88,8 @@ class SmartOdooUI(tk.Tk):
         )
         self.after(120, self._drain_output)
 
-    def _windows_subprocess_kwargs(self) -> dict[str, object]:
-        """Hide subprocess console windows on Windows."""
-        if os.name != "nt":
-            return {}
-
-        kwargs: dict[str, object] = {}
-        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if create_no_window:
-            kwargs["creationflags"] = create_no_window
-
-        startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
-        if startupinfo_cls is not None:
-            startupinfo = startupinfo_cls()
-            startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
-            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-            kwargs["startupinfo"] = startupinfo
-
-        return kwargs
+    def _platform_subprocess_kwargs(self) -> dict[str, object]:
+        return platform_subprocess_kwargs()
 
     def _build_variables(self) -> None:
         self.name_var = tk.StringVar()
@@ -126,7 +124,6 @@ class SmartOdooUI(tk.Tk):
             if isinstance(dark_mode, bool):
                 self.dark_mode_var.set(dark_mode)
         except (json.JSONDecodeError, OSError):
-            # Keep defaults when config cannot be read.
             return
 
     def _save_ui_settings(self) -> None:
@@ -216,7 +213,7 @@ class SmartOdooUI(tk.Tk):
         self.logs_scroll: ttk.Scrollbar = self.builder.get_object("logs_scroll", self)
 
         self.action_combo.configure(textvariable=self.action_var, values=[
-                                    "start/create", "delete", "test", "rebuild", "install", "pip_install"], state="readonly")
+            "start/create", "delete", "test", "rebuild", "install", "pip_install"], state="readonly")
         self.odoo_combo.configure(textvariable=self.odoo_var, values=["19.0"], state="normal")
         self.project_name_entry.configure(textvariable=self.name_var, values=[], state="normal",
                                           postcommand=self._refresh_project_names)
@@ -361,7 +358,6 @@ class SmartOdooUI(tk.Tk):
             arrowcolor=[("disabled", colors["disabled"]), ("active", colors["focus"]), ("readonly", colors["fg"])],
         )
 
-        # Improve combobox dropdown list readability in both themes.
         self.option_add("*TCombobox*Listbox.background", colors["list_bg"])
         self.option_add("*TCombobox*Listbox.foreground", colors["list_fg"])
         self.option_add("*TCombobox*Listbox.selectBackground", colors["focus"])
@@ -423,16 +419,8 @@ class SmartOdooUI(tk.Tk):
             return
 
         try:
-            if os.name == "nt":
-                subprocess.Popen(["cmd", "/c", "start", "", str(file_path)])
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(file_path)])
-            else:
-                xdg_open = shutil.which("xdg-open")
-                if not xdg_open:
-                    raise RuntimeError("'xdg-open' is not available in PATH.")
-                subprocess.Popen([xdg_open, str(file_path)])
-        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            platform_open_settings_file(file_path)
+        except (RuntimeError, OSError, subprocess.SubprocessError, FileNotFoundError) as exc:
             messagebox.showerror("Open file failed", f"Cannot open file: {file_path}\n\n{exc}")
 
     def _connect_events(self) -> None:
@@ -595,7 +583,7 @@ class SmartOdooUI(tk.Tk):
                 text=True,
                 capture_output=True,
                 check=False,
-                **self._windows_subprocess_kwargs(),
+                **self._platform_subprocess_kwargs(),
             )
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
@@ -614,7 +602,7 @@ class SmartOdooUI(tk.Tk):
                 text=True,
                 capture_output=True,
                 check=False,
-                **self._windows_subprocess_kwargs(),
+                **self._platform_subprocess_kwargs(),
             )
             if test.returncode == 0:
                 return [docker_path, "compose"]
@@ -698,7 +686,7 @@ class SmartOdooUI(tk.Tk):
                 capture_output=True,
                 check=False,
                 env=env,
-                **self._windows_subprocess_kwargs(),
+                **self._platform_subprocess_kwargs(),
             )
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
@@ -878,7 +866,7 @@ class SmartOdooUI(tk.Tk):
                 text=True,
                 capture_output=True,
                 check=False,
-                **self._windows_subprocess_kwargs(),
+                **self._platform_subprocess_kwargs(),
             )
             if result.returncode != 0:
                 stderr = result.stderr.strip() if result.stderr else "no details"
@@ -936,7 +924,7 @@ class SmartOdooUI(tk.Tk):
         if not text:
             return '""'
         if any(char.isspace() for char in text) or any(char in text for char in '"\''):
-            return f'"{text.replace("\"", "\\\"")}"'
+            text = text.replace('"', '\\"')
         return text
 
     def _run(self) -> None:
@@ -1000,7 +988,7 @@ class SmartOdooUI(tk.Tk):
             errors="replace",
             bufsize=1,
             universal_newlines=True,
-            **self._windows_subprocess_kwargs(),
+            **self._platform_subprocess_kwargs(),
         )
         threading.Thread(target=self._read_process_output, daemon=True).start()
 
