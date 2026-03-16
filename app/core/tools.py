@@ -10,6 +10,32 @@ class PlatformPaths(TypedDict):
     UPGRADE_UTIL_LOCATION: Path
 
 
+def resolve_config_json_path(*, root_dir: Path) -> Path:
+    """Resolve config.json location with platform-aware fallbacks."""
+    candidates: list[Path] = []
+    if os.name != "nt":
+        candidates.append(Path("/etc/smartodoo/config.json"))
+    candidates.extend([root_dir / "config" / "config.json", root_dir / "config.json"])
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def resolve_odoo_conf_path(*, root_dir: Path) -> Path:
+    """Resolve odoo.conf location with platform-aware fallbacks."""
+    candidates: list[Path] = []
+    if os.name != "nt":
+        candidates.append(Path("/etc/smartodoo/odoo.conf"))
+    candidates.append(root_dir / "config" / "odoo.conf")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 def resolve_config_path(raw_value: str, *, base_dir: Path) -> Path:
     """Resolve configured path with env/user expansion and relative support."""
     expanded = os.path.expanduser(os.path.expandvars(raw_value.strip()))
@@ -21,11 +47,7 @@ def resolve_config_path(raw_value: str, *, base_dir: Path) -> Path:
 
 def load_platform_paths(*, root_dir: Path) -> PlatformPaths:
     """Load required platform-specific paths from config.json in root_dir."""
-    config_path = root_dir / "config" / "config.json"
-    if not config_path.exists():
-        legacy_config_path = root_dir / "config.json"
-        if legacy_config_path.exists():
-            config_path = legacy_config_path
+    config_path = resolve_config_json_path(root_dir=root_dir)
     if not config_path.exists():
         raise RuntimeError(f"Missing required config file: {config_path}")
 

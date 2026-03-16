@@ -19,7 +19,11 @@ ROOT = SCRIPT_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.core.tools import load_platform_paths  # noqa: E402  # isort: skip
+from app.core.tools import (  # noqa: E402  # isort: skip
+    load_platform_paths,
+    resolve_config_json_path,
+    resolve_odoo_conf_path,
+)
 
 
 IS_WINDOWS = sys.platform.startswith("win")
@@ -50,8 +54,8 @@ class SmartOdooUI(tk.Tk):
 
         self.script_path = SCRIPT_DIR / "smartodoo.py"
         self.view_path = SCRIPT_DIR / "ui" / "smartodoo_view.xml"
-        self.config_json_path = ROOT / "config" / "config.json"
-        self.odoo_conf_path = ROOT / "config" / "odoo.conf"
+        self.config_json_path = resolve_config_json_path(root_dir=ROOT)
+        self.odoo_conf_path = resolve_odoo_conf_path(root_dir=ROOT)
         self.projects_dir = PROJECTS_DIR
 
         self.process: subprocess.Popen[str] | None = None

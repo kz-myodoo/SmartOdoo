@@ -16,11 +16,10 @@ ROOT = SCRIPT_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.core.tools import load_platform_paths  # noqa: E402  # isort: skip
+from app.core.tools import load_platform_paths, resolve_odoo_conf_path  # noqa: E402  # isort: skip
 
 
 ENV_FILE = ROOT / ".env"
-CONFIG_DIR = ROOT / "config"
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
 DOCKERIGNORE = ROOT / "docker" / ".dockerignore"
 DOCKER_COMPOSE = ROOT / "docker" / "docker-compose.yml"
@@ -57,6 +56,28 @@ else:
 def eprint(msg: str) -> None:
     """Print a message to stderr."""
     print(msg, file=sys.stderr)
+
+
+def resolve_launch_json_path() -> Path:
+    """Resolve launch.json template path with legacy fallback."""
+    primary = ROOT / ".vscode" / "launch.json"
+    if primary.exists():
+        return primary
+    fallback = ROOT / "launch.json"
+    if fallback.exists():
+        return fallback
+    return primary
+
+
+def resolve_encpass_path() -> Path:
+    """Resolve encpass.sh path for both legacy and packaged Linux layouts."""
+    primary = ROOT / "scripts" / "encpass.sh"
+    if primary.exists():
+        return primary
+    fallback = ROOT / "encpass.sh"
+    if fallback.exists():
+        return fallback
+    return primary
 
 
 PLATFORM_PATHS = load_platform_paths(root_dir=ROOT)
@@ -208,7 +229,7 @@ def get_secret(secret_name: str) -> str:
     """Resolve a secret using platform-specific storage backends."""
     if IS_WINDOWS:
         return platform_get_secret(secret_name, WINDOWS_SECRET_DIR)
-    return platform_get_secret(secret_name, ENCPASS)
+    return platform_get_secret(secret_name, resolve_encpass_path())
 
 
 def compose_exec_with_fallback(project_fullpath: Path, primary: list[str], fallback: list[str]) -> None:
@@ -527,13 +548,17 @@ def copy_required_files(project_fullpath: Path) -> None:
     shutil.copy2(DOCKER_COMPOSE, project_fullpath / "docker-compose.yml")
     shutil.copy2(ENTRYPOINT, project_fullpath / "entrypoint.sh")
     normalize_to_lf(project_fullpath / "entrypoint.sh")
-    shutil.copy2(LAUNCH_JSON, project_fullpath / ".vscode" / "launch.json")
-    for item in CONFIG_DIR.glob("*"):
-        dst = project_fullpath / "config" / item.name
-        if item.is_dir():
-            shutil.copytree(item, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(item, dst)
+    launch_json_path = resolve_launch_json_path()
+    if not launch_json_path.exists():
+        raise RuntimeError(
+            "Missing launch.json template. Expected '/opt/smartodoo/.vscode/launch.json' "
+            "or '/opt/smartodoo/launch.json'."
+        )
+    shutil.copy2(launch_json_path, project_fullpath / ".vscode" / "launch.json")
+
+    odoo_conf_path = resolve_odoo_conf_path(root_dir=ROOT)
+    if odoo_conf_path.exists():
+        shutil.copy2(odoo_conf_path, project_fullpath / "config" / "odoo.conf")
 
 
 def adjust_project_odoo_conf(project_fullpath: Path, install_enterprise_modules: bool) -> None:
