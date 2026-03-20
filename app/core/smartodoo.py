@@ -460,44 +460,14 @@ def rebuild_container(project_fullpath: Path, container_name: Optional[str]) -> 
     run_compose(project_fullpath, ["up", "-d", "--no-deps", "--force-recreate", "--build", container_name])
 
 
-def install_module(project_fullpath: Path, with_upgrade: bool, db: Optional[str], module: Optional[str]) -> None:
+def install_module(project_fullpath: Path, db: Optional[str], module: Optional[str]) -> None:
     """Install an Odoo module in a selected database."""
     if not module:
         display_help("You need to specify module name that you want to install. Use --install with -m")
     if not db:
         display_help("You need to specify database. Use --db")
-    run_compose(project_fullpath, ["stop", "web"], check=False)
-    if with_upgrade:
-        get_upgrade_util()
-        run_compose(
-            project_fullpath,
-            [
-                "run",
-                "--rm",
-                "web",
-                "/usr/bin/python3",
-                "-m",
-                "debugpy",
-                "--listen",
-                "0.0.0.0:5858",
-                "/usr/bin/odoo",
-                "--db_user=odoo",
-                "--db_host=db",
-                "--db_password=odoo",
-                "-c",
-                "/etc/odoo/odoo.conf",
-                "--upgrade-path=/mnt/upgrade-util/src",
-                "--stop-after-init",
-                "-d",
-                db,
-                "-i",
-                module,
-            ],
-        )
-    else:
-        run_compose(project_fullpath, ["run", "--rm", "web", "/usr/bin/odoo", "--db_user=odoo", "--db_host=db",
-                    "--db_password=odoo", "-c", "/etc/odoo/odoo.conf", "--stop-after-init", "-d", db, "-i", module])
-        run_compose(project_fullpath, ["start", "web"], check=False)
+    run_compose(project_fullpath, ["exec", "web", "/usr/bin/odoo", "--db_user=odoo", "--db_host=db",
+                "--db_password=odoo", "-c", "/etc/odoo/odoo.conf", "--stop-after-init", "-d", db, "-i", module])
 
 
 def pip_install(project_fullpath: Path, pip_module: Optional[str]) -> None:
@@ -527,7 +497,7 @@ def project_exist(args: argparse.Namespace, project_fullpath: Path) -> None:
     elif args.rebuild:
         rebuild_container(project_fullpath, args.rebuild)
     elif args.install:
-        install_module(project_fullpath, args.upgrade, args.db, args.module)
+        install_module(project_fullpath, args.db, args.module)
     elif args.pip_install:
         pip_install(project_fullpath, args.pip_install)
     else:
