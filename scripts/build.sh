@@ -1,17 +1,42 @@
 #!/bin/bash
 set -euo pipefail
 
+# Paths setup
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PACKAGING_DIR="$ROOT_DIR/packaging"
-DIST_LINUX_DIR="$PACKAGING_DIR/dist/linux"
-DIST_APP_DIR="$DIST_LINUX_DIR/opt/smartodoo"
-DIST_ETC_DIR="$DIST_LINUX_DIR/etc/smartodoo"
+TEMPLATE_LINUX_DIR="$PACKAGING_DIR/template/linux"
+TEMPLATE_DEBIAN_DIR="$TEMPLATE_LINUX_DIR/DEBIAN"
+SOURCE_DESKTOP_FILE="$TEMPLATE_LINUX_DIR/smartodoo.desktop"
+BUILD_DIR="$PACKAGING_DIR/build"
+DIST_APP_DIR="$BUILD_DIR/opt/smartodoo"
+DIST_ETC_DIR="$BUILD_DIR/etc/smartodoo"
+DIST_DEBIAN_DIR="$BUILD_DIR/DEBIAN"
+DIST_DESKTOP_DIR="$BUILD_DIR/usr/share/applications"
+DIST_DESKTOP_FILE="$DIST_DESKTOP_DIR/smartodoo.desktop"
 SOURCE_CONFIG="$ROOT_DIR/config/config.json"
 TARGET_CONFIG="$DIST_ETC_DIR/config.json"
+CONTROL_FILE="$TEMPLATE_DEBIAN_DIR/control"
 
-mkdir -p "$DIST_APP_DIR" "$DIST_ETC_DIR"
+# Package version extraction
+PACKAGE_VERSION="$(awk -F': *' '/^Version:/ {print $2; exit}' "$CONTROL_FILE")"
+if [ -z "$PACKAGE_VERSION" ]; then
+	echo "Error: Could not read Version from $CONTROL_FILE" >&2
+	exit 1
+fi
 
+OUTPUT_DEB="$BUILD_DIR/smartodoo-$PACKAGE_VERSION.deb"
+
+# Create necessary directories
+mkdir -p "$DIST_APP_DIR" "$DIST_ETC_DIR" "$DIST_DESKTOP_DIR"
+
+# Recraete DEBIAN directory and copy files
+rm -rf "$DIST_DEBIAN_DIR"
+mkdir -p "$DIST_DEBIAN_DIR"
+cp -a "$TEMPLATE_DEBIAN_DIR/." "$DIST_DEBIAN_DIR/"
+cp -a "$SOURCE_DESKTOP_FILE" "$DIST_DESKTOP_FILE"
+
+# Recreate application directory and copy files
 rm -rf "$DIST_APP_DIR/app" "$DIST_APP_DIR/docker" "$DIST_APP_DIR/scripts"
 cp -a "$ROOT_DIR/app" "$DIST_APP_DIR/"
 cp -a "$ROOT_DIR/docker" "$DIST_APP_DIR/"
@@ -45,5 +70,5 @@ target.write_text(json.dumps(payload, indent=4, ensure_ascii=True) + "\n", encod
 PY
 
 cd "$PACKAGING_DIR"
-desktop-file-validate dist/linux/usr/share/applications/smartodoo.desktop
-sudo dpkg -r smartodoo && dpkg-deb --build dist/linux smartodoo.deb && sudo dpkg -i smartodoo.deb
+desktop-file-validate build/usr/share/applications/smartodoo.desktop
+dpkg-deb --build build "$OUTPUT_DEB"

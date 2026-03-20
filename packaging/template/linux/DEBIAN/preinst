@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+echo "Action preinst: $1"
+
+mkdir -p /etc/smartodoo
+
+if [ ! -f /etc/smartodoo/config.json ] && [ -f /opt/smartodoo/config.json ]; then
+	echo "Migrating legacy config.json to /etc/smartodoo/config.json"
+	cp -p /opt/smartodoo/config.json /etc/smartodoo/config.json
+fi
+
+if [ ! -f /etc/smartodoo/odoo.conf ] && [ -f /opt/smartodoo/config/odoo.conf ]; then
+	echo "Migrating legacy odoo.conf to /etc/smartodoo/odoo.conf"
+	cp -p /opt/smartodoo/config/odoo.conf /etc/smartodoo/odoo.conf
+fi
+
+exit 0

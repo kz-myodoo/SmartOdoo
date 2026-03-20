@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+echo "Action postinst: $1"
+# Create a virtual environment and install the required packages
+python3 -m venv /opt/smartodoo/.venv
+/opt/smartodoo/.venv/bin/pip install --upgrade pip
+/opt/smartodoo/.venv/bin/pip install -r /opt/smartodoo/requirements.txt
+
+exit 0

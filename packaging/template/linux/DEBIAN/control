@@ -1,0 +1,8 @@
+Package: smartodoo
+Version: 2.3
+Architecture: all
+Essential: no
+Priority: optional
+Depends: git,curl,python3,docker-ce,docker-ce-cli,containerd.io,docker-buildx-plugin,docker-compose-plugin,python3-tk,python3-venv,python3-pip
+Maintainer: Krystian Zagdanski
+Description: A tool to manage Odoo instances with Docker. It allows you to easily create, start, stop, and remove Odoo containers, as well as manage their configurations and data volumes.
