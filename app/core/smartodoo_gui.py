@@ -459,7 +459,7 @@ class SmartOdooUI(tk.Tk):
         action = self.action_var.get()
 
         show_create_fields = action == "start/create"
-        show_upgrade = action in {"start/create", "install"}
+        show_upgrade = action == "start/create"
 
         show_db = action in {"test", "install"}
         show_module = action in {"test", "install"}
@@ -766,9 +766,6 @@ class SmartOdooUI(tk.Tk):
                 cmd.append("-u")
 
         elif action == "install":
-            if self.upgrade_var.get():
-                cmd.append("-u")
-
             db = self.db_var.get().strip()
             module = self.module_var.get().strip()
             if not db or not module:
