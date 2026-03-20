@@ -20,18 +20,23 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app.core.tools import (  # noqa: E402  # isort: skip
+    get_latest_github_release_info,
     load_platform_paths,
     resolve_config_json_path,
     resolve_odoo_conf_path,
 )
+from app.core.updater import is_update_available, prepare_latest_installer  # noqa: E402  # isort: skip
+from app.core.version import get_smartodoo_version  # noqa: E402  # isort: skip
 
 
 IS_WINDOWS = sys.platform.startswith("win")
 if IS_WINDOWS:
     from app.platform.windows.gui_platform import open_settings_file as platform_open_settings_file
+    from app.platform.windows.gui_platform import launch_installer as platform_launch_installer
     from app.platform.windows.process import windows_hidden_subprocess_kwargs as platform_subprocess_kwargs
 else:
     from app.platform.linux.gui_platform import open_settings_file as platform_open_settings_file
+    from app.platform.linux.gui_platform import launch_installer as platform_launch_installer
 
     def platform_subprocess_kwargs() -> dict[str, object]:
         return {}
@@ -39,6 +44,7 @@ else:
 
 PLATFORM_PATHS = load_platform_paths(root_dir=ROOT)
 PROJECTS_DIR = PLATFORM_PATHS["PROJECTS_DIR"]
+SMARTODOO_VERSION = get_smartodoo_version(root_dir=ROOT)
 
 
 class SmartOdooUI(tk.Tk):
@@ -54,6 +60,7 @@ class SmartOdooUI(tk.Tk):
 
         self.script_path = SCRIPT_DIR / "smartodoo.py"
         self.view_path = SCRIPT_DIR / "ui" / "smartodoo_view.xml"
+        self.version_popup_view_path = SCRIPT_DIR / "ui" / "version_pop_view.xml"
         self.config_json_path = resolve_config_json_path(root_dir=ROOT)
         self.odoo_conf_path = resolve_odoo_conf_path(root_dir=ROOT)
         self.projects_dir = PROJECTS_DIR
@@ -68,6 +75,12 @@ class SmartOdooUI(tk.Tk):
         self._prompt_tail = ""
         self._awaiting_secret_input = False
         self._pending_secret_value: str | None = None
+        self._about_window: tk.Toplevel | None = None
+        self._about_current_var: tk.StringVar | None = None
+        self._about_latest_var: tk.StringVar | None = None
+        self._about_status_var: tk.StringVar | None = None
+        self._about_check_btn: ttk.Button | None = None
+        self._about_update_btn: ttk.Button | None = None
 
         self._build_variables()
         self._load_ui_settings()
@@ -111,6 +124,7 @@ class SmartOdooUI(tk.Tk):
         self.rebuild_var = tk.StringVar()
         self.pip_var = tk.StringVar()
         self.dark_mode_var = tk.BooleanVar(value=False)
+        self.version_var = tk.StringVar(value=f"v{SMARTODOO_VERSION}")
 
         self.command_preview_var = tk.StringVar(value="Command: ")
 
@@ -159,10 +173,15 @@ class SmartOdooUI(tk.Tk):
     def _build_ui_from_xml(self) -> None:
         if not self.view_path.exists():
             raise FileNotFoundError(f"View file not found: {self.view_path}")
+        if not self.version_popup_view_path.exists():
+            raise FileNotFoundError(f"View file not found: {self.version_popup_view_path}")
 
         self.builder = pygubu.Builder()
         self.builder.add_from_file(str(self.view_path))
         self.mainframe = self.builder.get_object("mainframe", self)
+
+        self.popup_builder = pygubu.Builder()
+        self.popup_builder.add_from_file(str(self.version_popup_view_path))
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -179,6 +198,8 @@ class SmartOdooUI(tk.Tk):
         self.output_frame = self.builder.get_object("output_frame", self)
         self.output_frame.columnconfigure(0, weight=1)
         self.output_frame.rowconfigure(0, weight=1)
+        self.footer = self.builder.get_object("footer", self)
+        self.footer.columnconfigure(0, weight=1)
 
         self.action_label: ttk.Label = self.builder.get_object("action_label", self)
         self.title_label: ttk.Label = self.builder.get_object("title_label", self)
@@ -213,11 +234,36 @@ class SmartOdooUI(tk.Tk):
         self.copy_logs_btn: ttk.Button = self.builder.get_object("copy_logs_btn", self)
 
         self.command_preview_label: ttk.Label = self.builder.get_object("command_preview_label", self)
+        self.version_label: ttk.Label = self.builder.get_object("version_label", self)
         self.output_text: tk.Text = self.builder.get_object("output_text", self)
         self.logs_scroll: ttk.Scrollbar = self.builder.get_object("logs_scroll", self)
 
+        self._about_window = self.popup_builder.get_object("about_window", self)
+        self.about_current_value_label: ttk.Label = self.popup_builder.get_object("about_current_value_label", self)
+        self.about_new_value_label: ttk.Label = self.popup_builder.get_object("about_new_value_label", self)
+        self.about_status_value_label: ttk.Label = self.popup_builder.get_object("about_status_value_label", self)
+        self._about_check_btn = self.popup_builder.get_object("about_check_btn", self)
+        self._about_update_btn = self.popup_builder.get_object("about_update_btn", self)
+        self.about_close_btn: ttk.Button = self.popup_builder.get_object("about_close_btn", self)
+
+        self._about_current_var = tk.StringVar(value=f"v{SMARTODOO_VERSION}")
+        self._about_latest_var = tk.StringVar(value="None")
+        self._about_status_var = tk.StringVar(value="Status unavailable")
+
+        self.about_current_value_label.configure(textvariable=self._about_current_var)
+        self.about_new_value_label.configure(textvariable=self._about_latest_var)
+        self.about_status_value_label.configure(textvariable=self._about_status_var)
+        self._about_check_btn.configure(command=self._check_latest_version_live)
+        self._about_update_btn.configure(command=self._start_update_installation, state="disabled")
+        self.about_close_btn.configure(command=self._close_about_window)
+
+        self._about_window.withdraw()
+        self._about_window.resizable(False, False)
+        self._about_window.transient(self)
+        self._about_window.protocol("WM_DELETE_WINDOW", self._close_about_window)
+
         self.action_combo.configure(textvariable=self.action_var, values=[
-            "start/create", "delete", "test", "rebuild", "install", "pip_install"], state="readonly")
+            "start/create", "delete", "test", "rebuild", "install", "pip_install", "generate_template"], state="readonly")
         self.odoo_combo.configure(textvariable=self.odoo_var, values=["19.0"], state="normal")
         self.project_name_entry.configure(textvariable=self.name_var, values=[], state="normal",
                                           postcommand=self._refresh_project_names)
@@ -234,6 +280,7 @@ class SmartOdooUI(tk.Tk):
         self.pip_entry.configure(textvariable=self.pip_var)
 
         self.command_preview_label.configure(textvariable=self.command_preview_var, wraplength=620)
+        self.version_label.configure(textvariable=self.version_var, anchor="e", justify="right")
         self.title_label.configure(font=("Segoe UI", 14, "bold"))
         self.logs_scroll.configure(command=self.output_text.yview)
         self.output_text.configure(yscrollcommand=self.logs_scroll.set)
@@ -256,8 +303,133 @@ class SmartOdooUI(tk.Tk):
             command=lambda: self._open_settings_file(self.odoo_conf_path),
         )
         menubar.add_cascade(label="Settings", menu=settings_menu)
+
+        about_menu = tk.Menu(menubar, tearoff=False)
+        about_menu.add_command(label="Version", command=self._show_version_popup)
+        menubar.add_cascade(label="About", menu=about_menu)
+
         self.config(menu=menubar)
         self.settings_menu = settings_menu
+        self.about_menu = about_menu
+
+    def _show_version_popup(self) -> None:
+        if self._about_window is None:
+            return
+        if self._about_window.state() != "withdrawn":
+            self._about_window.lift()
+            self._about_window.focus_force()
+            return
+
+        current_version = f"v{SMARTODOO_VERSION}"
+        latest_version = self._format_latest_version(force_refresh=False)
+
+        if self._about_current_var is not None:
+            self._about_current_var.set(current_version)
+        if self._about_latest_var is not None:
+            self._about_latest_var.set(latest_version)
+        if self._about_status_var is not None:
+            self._about_status_var.set(self._build_version_status(current_version, latest_version))
+        self._set_about_update_button_state(current_version, latest_version)
+
+        self._about_window.deiconify()
+        self._about_window.grab_set()
+        self._about_window.lift()
+        self._about_window.focus_force()
+
+    def _close_about_window(self) -> None:
+        if self._about_window is None:
+            return
+        try:
+            self._about_window.grab_release()
+        except tk.TclError:
+            pass
+        self._about_window.withdraw()
+
+    def _build_version_status(self, current_version: str, latest_version: str) -> str:
+        if latest_version in {"None", "Checking..."} or latest_version.startswith("error ("):
+            return "Status unavailable"
+        return "Update available" if is_update_available(current_version, latest_version) else "Up to date"
+
+    def _set_about_update_button_state(self, current_version: str, latest_version: str) -> None:
+        if self._about_update_btn is None:
+            return
+        enabled = (
+            latest_version not in {"None", "Checking..."}
+            and not latest_version.startswith("error (")
+            and is_update_available(current_version, latest_version)
+        )
+        self._about_update_btn.configure(state="normal" if enabled else "disabled")
+
+    def _format_latest_version(self, force_refresh: bool) -> str:
+        try:
+            latest_info = get_latest_github_release_info(force_refresh=force_refresh)
+            return latest_info["tag_name"] if latest_info else "None"
+        except RuntimeError as exc:
+            return f"error ({exc})"
+
+    def _check_latest_version_live(self) -> None:
+        if self._about_latest_var is None:
+            return
+        if self._about_check_btn is not None:
+            self._about_check_btn.configure(state="disabled")
+        if self._about_update_btn is not None:
+            self._about_update_btn.configure(state="disabled")
+        self._about_latest_var.set("Checking...")
+        threading.Thread(target=self._check_latest_version_live_worker, daemon=True).start()
+
+    def _check_latest_version_live_worker(self) -> None:
+        latest_version = self._format_latest_version(force_refresh=True)
+        self.after(0, lambda: self._apply_latest_version_live(latest_version))
+
+    def _apply_latest_version_live(self, latest_version: str) -> None:
+        if self._about_latest_var is not None:
+            self._about_latest_var.set(latest_version)
+        if self._about_status_var is not None:
+            self._about_status_var.set(self._build_version_status(f"v{SMARTODOO_VERSION}", latest_version))
+        self._set_about_update_button_state(f"v{SMARTODOO_VERSION}", latest_version)
+        if self._about_check_btn is not None and self._about_check_btn.winfo_exists():
+            self._about_check_btn.configure(state="normal")
+
+    def _start_update_installation(self) -> None:
+        if self._about_check_btn is not None:
+            self._about_check_btn.configure(state="disabled")
+        if self._about_update_btn is not None:
+            self._about_update_btn.configure(state="disabled")
+        if self._about_status_var is not None:
+            self._about_status_var.set("Downloading update...")
+        threading.Thread(target=self._update_installation_worker, daemon=True).start()
+
+    def _update_installation_worker(self) -> None:
+        try:
+            installer_path, latest_version = prepare_latest_installer(
+                current_version=f"v{SMARTODOO_VERSION}",
+                force_refresh=True,
+            )
+            platform_launch_installer(installer_path)
+            self.after(0, lambda: self._on_update_installation_success(latest_version, installer_path))
+        except Exception as exc:
+            self.after(0, lambda: self._on_update_installation_error(str(exc)))
+
+    def _on_update_installation_success(self, latest_version: str, installer_path: Path) -> None:
+        if self._about_latest_var is not None:
+            self._about_latest_var.set(latest_version)
+        if self._about_status_var is not None:
+            self._about_status_var.set("Installer started in console")
+        if self._about_check_btn is not None:
+            self._about_check_btn.configure(state="normal")
+        self._set_about_update_button_state(f"v{SMARTODOO_VERSION}", latest_version)
+        self._append_output(
+            f"Update installer started in console: {installer_path} (target {latest_version})\n"
+        )
+
+    def _on_update_installation_error(self, error_message: str) -> None:
+        latest_version = self._about_latest_var.get() if self._about_latest_var is not None else "None"
+        if self._about_status_var is not None:
+            self._about_status_var.set(f"Update failed: {error_message}")
+        if self._about_check_btn is not None:
+            self._about_check_btn.configure(state="normal")
+        self._set_about_update_button_state(f"v{SMARTODOO_VERSION}", latest_version)
+        messagebox.showerror("Update failed", error_message)
 
     def _on_dark_mode_toggle(self) -> None:
         self._apply_theme()
@@ -387,6 +559,13 @@ class SmartOdooUI(tk.Tk):
 
         if hasattr(self, "settings_menu"):
             self.settings_menu.configure(
+                background=colors["input_bg"],
+                foreground=colors["fg"],
+                activebackground=colors["accent"],
+                activeforeground=colors["fg"],
+            )
+        if hasattr(self, "about_menu"):
+            self.about_menu.configure(
                 background=colors["input_bg"],
                 foreground=colors["fg"],
                 activebackground=colors["accent"],
@@ -804,6 +983,9 @@ class SmartOdooUI(tk.Tk):
                 raise ValueError("Action 'pip_install' requires 'Pip package'.")
             cmd.extend(["--pip_install", pip_pkg])
 
+        elif action == "generate_template":
+            cmd.append("--generate_template")
+
         return cmd
 
     def _set_running_state(self, running: bool) -> None:
@@ -832,6 +1014,9 @@ class SmartOdooUI(tk.Tk):
 
         if action == "pip_install":
             return bool(self.pip_var.get().strip())
+
+        if action == "generate_template":
+            return True
 
         return True
 

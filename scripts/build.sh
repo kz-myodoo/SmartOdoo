@@ -18,10 +18,24 @@ SOURCE_CONFIG="$ROOT_DIR/config/config.json"
 TARGET_CONFIG="$DIST_ETC_DIR/config.json"
 CONTROL_FILE="$TEMPLATE_DEBIAN_DIR/control"
 
-# Package version extraction
-PACKAGE_VERSION="$(awk -F': *' '/^Version:/ {print $2; exit}' "$CONTROL_FILE")"
+# Package version extraction (source of truth: app/core/version.py)
+PACKAGE_VERSION="$(python3 - "$ROOT_DIR" <<'PY'
+import sys
+
+root = sys.argv[1]
+sys.path.insert(0, root)
+from app.core.version import get_smartodoo_version
+version = get_smartodoo_version(root_dir=None)
+print(version)
+PY
+)"
 if [ -z "$PACKAGE_VERSION" ]; then
-	echo "Error: Could not read Version from $CONTROL_FILE" >&2
+	echo "Error: Could not resolve package version from app/core/version.py" >&2
+	exit 1
+fi
+
+if [ "$PACKAGE_VERSION" = "dev" ]; then
+	echo "Error: Resolved package version is 'dev'; set a release version in app/setup.py" >&2
 	exit 1
 fi
 
@@ -35,6 +49,22 @@ rm -rf "$DIST_DEBIAN_DIR"
 mkdir -p "$DIST_DEBIAN_DIR"
 cp -a "$TEMPLATE_DEBIAN_DIR/." "$DIST_DEBIAN_DIR/"
 cp -a "$SOURCE_DESKTOP_FILE" "$DIST_DESKTOP_FILE"
+
+python3 - "$DIST_DEBIAN_DIR/control" "$PACKAGE_VERSION" <<'PY'
+import pathlib
+import re
+import sys
+
+control_path = pathlib.Path(sys.argv[1])
+package_version = sys.argv[2]
+content = control_path.read_text(encoding="utf-8")
+
+if not re.search(r"^Version:\s*.*$", content, flags=re.MULTILINE):
+	raise SystemExit(f"Error: Missing 'Version:' field in {control_path}")
+
+updated = re.sub(r"^Version:\s*.*$", f"Version: {package_version}", content, flags=re.MULTILINE)
+control_path.write_text(updated, encoding="utf-8")
+PY
 
 # Recreate application directory and copy files
 rm -rf "$DIST_APP_DIR/app" "$DIST_APP_DIR/docker" "$DIST_APP_DIR/scripts"

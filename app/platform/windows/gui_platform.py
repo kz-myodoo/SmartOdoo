@@ -26,3 +26,11 @@ def open_settings_file(file_path: Path) -> None:
         raise FileNotFoundError(f"Not found: {file_path}")
 
     subprocess.Popen(["cmd", "/c", "start", "", str(file_path)])
+
+
+def launch_installer(installer_path: Path) -> None:
+    """Launch installer executable using Windows shell."""
+    if not installer_path.exists():
+        raise FileNotFoundError(f"Not found: {installer_path}")
+
+    subprocess.Popen(["cmd", "/c", "start", "", str(installer_path)])

@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<interface version="1.4">
+  <object class="tk.Toplevel" id="about_window">
+    <property name="title">SmartOdoo Version</property>
+
+    <child>
+      <object class="ttk.Frame" id="about_frame">
+        <property name="padding">12</property>
+        <layout manager="grid">
+          <property name="row">0</property>
+          <property name="column">0</property>
+          <property name="sticky">nsew</property>
+        </layout>
+
+        <child>
+          <object class="ttk.Label" id="about_current_label">
+            <property name="text">Current version:</property>
+            <layout manager="grid">
+              <property name="row">0</property>
+              <property name="column">0</property>
+              <property name="sticky">w</property>
+              <property name="padx">0 8</property>
+              <property name="pady">0 6</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="about_current_value_label">
+            <property name="text">v0.0</property>
+            <layout manager="grid">
+              <property name="row">0</property>
+              <property name="column">1</property>
+              <property name="sticky">w</property>
+              <property name="pady">0 6</property>
+            </layout>
+          </object>
+        </child>
+
+        <child>
+          <object class="ttk.Label" id="about_new_label">
+            <property name="text">New version:</property>
+            <layout manager="grid">
+              <property name="row">1</property>
+              <property name="column">0</property>
+              <property name="sticky">w</property>
+              <property name="padx">0 8</property>
+              <property name="pady">0 10</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="about_new_value_label">
+            <property name="text">None</property>
+            <layout manager="grid">
+              <property name="row">1</property>
+              <property name="column">1</property>
+              <property name="sticky">w</property>
+              <property name="pady">0 10</property>
+            </layout>
+          </object>
+        </child>
+
+        <child>
+          <object class="ttk.Label" id="about_status_label">
+            <property name="text">Status:</property>
+            <layout manager="grid">
+              <property name="row">2</property>
+              <property name="column">0</property>
+              <property name="sticky">w</property>
+              <property name="padx">0 8</property>
+              <property name="pady">0 10</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="about_status_value_label">
+            <property name="text">Status unavailable</property>
+            <layout manager="grid">
+              <property name="row">2</property>
+              <property name="column">1</property>
+              <property name="sticky">w</property>
+              <property name="pady">0 10</property>
+            </layout>
+          </object>
+        </child>
+
+        <child>
+          <object class="ttk.Frame" id="about_buttons">
+            <layout manager="grid">
+              <property name="row">3</property>
+              <property name="column">0</property>
+              <property name="columnspan">2</property>
+              <property name="sticky">e</property>
+            </layout>
+
+            <child>
+              <object class="ttk.Button" id="about_check_btn">
+                <property name="text">Check</property>
+                <layout manager="grid">
+                  <property name="row">0</property>
+                  <property name="column">0</property>
+                  <property name="padx">0 6</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Button" id="about_update_btn">
+                <property name="text">Update</property>
+                <layout manager="grid">
+                  <property name="row">0</property>
+                  <property name="column">1</property>
+                  <property name="padx">0 6</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Button" id="about_close_btn">
+                <property name="text">Close</property>
+                <layout manager="grid">
+                  <property name="row">0</property>
+                  <property name="column">2</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

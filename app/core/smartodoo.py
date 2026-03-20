@@ -17,6 +17,8 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from app.core.tools import load_platform_paths, resolve_odoo_conf_path  # noqa: E402  # isort: skip
+from app.core.tools import get_latest_github_release_info  # noqa: E402  # isort: skip
+from app.core.version import get_smartodoo_version  # noqa: E402  # isort: skip
 
 
 ENV_FILE = ROOT / ".env"
@@ -34,6 +36,8 @@ ODOO_REVISION = ""
 ODOO_GITHUB_NAME = "odoo"
 ODOO_ENTERPRISE_REPOSITORY = "enterprise"
 UPGRADE_UTIL_REPOSITORY = "git@github.com:odoo/upgrade-util.git"
+SCAFFOLD_ADDONS_PATH = "/mnt/extra-addons"
+SMARTODOO_VERSION = get_smartodoo_version(root_dir=ROOT)
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -481,6 +485,23 @@ def pip_install(project_fullpath: Path, pip_module: Optional[str]) -> None:
     )
 
 
+def generate_template(project_fullpath: Path) -> None:
+    """Generate Odoo module scaffold named module_template in project addons path."""
+    compose_args = ["exec", "web", "/usr/bin/odoo", "scaffold", "module_template", SCAFFOLD_ADDONS_PATH]
+    if not IS_WINDOWS and hasattr(os, "getuid") and hasattr(os, "getgid"):
+        compose_args = [
+            "exec",
+            "-u",
+            f"{os.getuid()}:{os.getgid()}",
+            "web",
+            "/usr/bin/odoo",
+            "scaffold",
+            "module_template",
+            SCAFFOLD_ADDONS_PATH,
+        ]
+    run_compose(project_fullpath, compose_args)
+
+
 def project_exist(args: argparse.Namespace, project_fullpath: Path) -> None:
     """Execute action flow for an existing project."""
     entrypoint_path = project_fullpath / "entrypoint.sh"
@@ -500,6 +521,8 @@ def project_exist(args: argparse.Namespace, project_fullpath: Path) -> None:
         install_module(project_fullpath, args.db, args.module)
     elif args.pip_install:
         pip_install(project_fullpath, args.pip_install)
+    elif args.generate_template:
+        generate_template(project_fullpath)
     else:
         project_start(args.name, project_fullpath, args.upgrade)
 
@@ -600,6 +623,7 @@ def display_help(error: Optional[str] = None) -> None:
     """Print usage information and exit with code 2."""
     if error:
         eprint(error)
+    print(f"SmartOdoo version: {SMARTODOO_VERSION}")
     print("Usage: python3 smartodoo.py -n {project_name} [parameters...]")
     print()
     print("Examples:")
@@ -617,6 +641,7 @@ def display_help(error: Optional[str] = None) -> None:
     print("  -d, --delete               Delete project if exists")
     print("      --pip_install          Install pip module on web container")
     print("      --install              Install module (-m, --db required)")
+    print("      --generate_template    Generate scaffold module_template in addons path")
     print("  -u, --upgrade              Run with upgrade-util")
     print("  -r, --rebuild              Rebuild selected container")
     print("  -t, --test                 Run tests")
@@ -625,6 +650,8 @@ def display_help(error: Optional[str] = None) -> None:
     print("      --db                   Database for tests/install")
     print("      --list_odoo_tags       Print Odoo Docker tags as JSON")
     print("      --list_psql_tags       Print PostgreSQL Docker tags as JSON")
+    print("      --version              Print SmartOdoo version")
+    print("      --latest_version       Print latest SmartOdoo release tag from GitHub (live)")
     raise SystemExit(2)
 
 
@@ -644,12 +671,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-r", "--rebuild")
     parser.add_argument("--pip_install")
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--generate_template", action="store_true")
     parser.add_argument("--db")
     parser.add_argument("--tags")
     parser.add_argument("--list_odoo_tags", action="store_true")
     parser.add_argument("--list_psql_tags", action="store_true")
+    parser.add_argument("--version", action="store_true")
+    parser.add_argument("--latest_version", action="store_true")
     parser.add_argument("-h", "--help", action="store_true")
     args = parser.parse_args()
+    if args.version:
+        print(SMARTODOO_VERSION)
+        raise SystemExit(0)
+    if args.latest_version:
+        latest_info = get_latest_github_release_info(force_refresh=True)
+        print(latest_info["tag_name"] if latest_info else "None")
+        raise SystemExit(0)
     if args.help:
         display_help()
     if args.list_odoo_tags or args.list_psql_tags:
@@ -682,7 +719,7 @@ def main() -> None:
     project_fullpath = project_base / args.name
     if project_fullpath.exists():
         project_exist(args, project_fullpath)
-    elif args.delete:
+    elif args.delete or args.generate_template:
         print("PROJECT DOESN'T EXIST")
         raise SystemExit(1)
     else:
