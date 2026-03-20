@@ -1,11 +1,17 @@
 import json
 import os
 import re
+import ssl
 from pathlib import Path
 from threading import Lock
 from typing import Optional, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - optional dependency during development
+    certifi = None
 
 
 class PlatformPaths(TypedDict):
@@ -129,11 +135,18 @@ def _github_get_json(url: str) -> dict:
             "User-Agent": "SmartOdoo",
         },
     )
-    with urlopen(request, timeout=15) as response:
+    with urlopen(request, timeout=15, context=create_tls_context()) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise RuntimeError(f"Invalid JSON response from GitHub API: {url}")
     return payload
+
+
+def create_tls_context() -> ssl.SSLContext:
+    """Create SSL context preferring certifi CA bundle when available."""
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
 
 
 def _parse_release_payload(payload: dict, *, owner: str, repository: str, source: str) -> GithubReleaseInfo:

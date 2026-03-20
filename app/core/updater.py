@@ -7,6 +7,7 @@ from urllib.request import urlopen
 from app.core.tools import (
     DEFAULT_GITHUB_REPOSITORY_URL,
     GithubReleaseInfo,
+    create_tls_context,
     get_latest_github_release_info,
     normalize_version_tag,
 )
@@ -66,7 +67,7 @@ def download_release_asset(asset: dict[str, str], target_dir: Path | None = None
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination_path = destination_dir / asset_name
 
-    with urlopen(download_url, timeout=60) as response:
+    with urlopen(download_url, timeout=60, context=create_tls_context()) as response:
         destination_path.write_bytes(response.read())
 
     return destination_path
