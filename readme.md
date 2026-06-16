@@ -150,7 +150,8 @@ Usage: ./docker_start.sh -n {project_name} [parameters...]
 
    -n, --name                 (M) (N)  Set project directory and containers names
    -o, --odoo                     (N)  Set version of Odoo
-   -p, --psql                     (N)  Set version of postgreSQL
+  -p, --psql                     (N)  Set PostgreSQL version (or pgvector image version with --pgvector)
+    --pgvector                       Use pgvector image for PostgreSQL container
    -a, --addons                   (N)  Set addons repository HTTPS url
    -b, --branch                   (N)  Set addons repository branch
    -e, --enterprise                    Set for install enterprise modules

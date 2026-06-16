@@ -33,10 +33,24 @@ IS_WINDOWS = sys.platform.startswith("win")
 if IS_WINDOWS:
     from app.platform.windows.gui_platform import open_settings_file as platform_open_settings_file
     from app.platform.windows.gui_platform import launch_installer as platform_launch_installer
+    from app.platform.windows.passwd import load_windows_credential_token as platform_load_windows_credential_token
+    from app.platform.windows.passwd import save_windows_credential_token as platform_save_windows_credential_token
     from app.platform.windows.process import windows_hidden_subprocess_kwargs as platform_subprocess_kwargs
 else:
     from app.platform.linux.gui_platform import open_settings_file as platform_open_settings_file
     from app.platform.linux.gui_platform import launch_installer as platform_launch_installer
+    from app.platform.linux.passwd import upsert_secret as platform_upsert_linux_secret
+
+    def platform_load_windows_credential_token(_secret_file: Path) -> str | None:
+        return None
+
+    def platform_save_windows_credential_token(
+        _secret_file: Path,
+        _token: str,
+        _username: str,
+        _windows_secret_dir: Path,
+    ) -> None:
+        raise RuntimeError("Windows credential storage is unavailable on this platform.")
 
     def platform_subprocess_kwargs() -> dict[str, object]:
         return {}
@@ -45,6 +59,32 @@ else:
 PLATFORM_PATHS = load_platform_paths(root_dir=ROOT)
 PROJECTS_DIR = PLATFORM_PATHS["PROJECTS_DIR"]
 SMARTODOO_VERSION = get_smartodoo_version(root_dir=ROOT)
+ENCPASS_BUCKET = "smartodoo"
+WINDOWS_SECRET_DIR = ROOT / "secret"
+
+CREDENTIAL_SPECS = [
+    {
+        "label": "GitHub Addons",
+        "password_secret": "github_addons_token",
+        "windows_password_file": "git_addons.xml",
+    },
+    {
+        "label": "GitHub Enterprise",
+        "password_secret": "github_enterprise_token",
+        "windows_password_file": "git_ent.xml",
+    },
+]
+
+
+def resolve_encpass_path() -> Path:
+    """Resolve encpass.sh path for both legacy and packaged Linux layouts."""
+    primary = ROOT / "scripts" / "encpass.sh"
+    if primary.exists():
+        return primary
+    fallback = ROOT / "encpass.sh"
+    if fallback.exists():
+        return fallback
+    return primary
 
 
 class SmartOdooUI(tk.Tk):
@@ -81,6 +121,9 @@ class SmartOdooUI(tk.Tk):
         self._about_status_var: tk.StringVar | None = None
         self._about_check_btn: ttk.Button | None = None
         self._about_update_btn: ttk.Button | None = None
+        self._credentials_window: tk.Toplevel | None = None
+        self._credentials_rows: list[dict[str, object]] = []
+        self._credentials_status_var = tk.StringVar(value="")
 
         self._build_variables()
         self._load_ui_settings()
@@ -114,6 +157,7 @@ class SmartOdooUI(tk.Tk):
         self.psql_var = tk.StringVar(value="16")
         self.addons_var = tk.StringVar()
         self.branch_var = tk.StringVar()
+        self.vector_var = tk.BooleanVar(value=True)
         self.enterprise_var = tk.BooleanVar(value=True)
         self.upgrade_var = tk.BooleanVar(value=False)
 
@@ -214,6 +258,7 @@ class SmartOdooUI(tk.Tk):
         self.addons_entry: ttk.Entry = self.builder.get_object("addons_entry", self)
         self.branch_label: ttk.Label = self.builder.get_object("branch_label", self)
         self.branch_combo: ttk.Combobox = self.builder.get_object("branch_combo", self)
+        self.vector_check: ttk.Checkbutton = self.builder.get_object("vector_check", self)
         self.enterprise_check: ttk.Checkbutton = self.builder.get_object("enterprise_check", self)
         self.upgrade_check: ttk.Checkbutton = self.builder.get_object("upgrade_check", self)
 
@@ -270,6 +315,7 @@ class SmartOdooUI(tk.Tk):
         self.psql_combo.configure(textvariable=self.psql_var, values=["16"], state="normal")
         self.addons_entry.configure(textvariable=self.addons_var)
         self.branch_combo.configure(textvariable=self.branch_var, values=[], state="normal")
+        self.vector_check.configure(variable=self.vector_var)
         self.enterprise_check.configure(variable=self.enterprise_var)
         self.upgrade_check.configure(variable=self.upgrade_var)
 
@@ -295,6 +341,10 @@ class SmartOdooUI(tk.Tk):
         )
         settings_menu.add_separator()
         settings_menu.add_command(
+            label="Credentials",
+            command=self._show_credentials_popup,
+        )
+        settings_menu.add_command(
             label="config.json",
             command=lambda: self._open_settings_file(self.config_json_path),
         )
@@ -311,6 +361,222 @@ class SmartOdooUI(tk.Tk):
         self.config(menu=menubar)
         self.settings_menu = settings_menu
         self.about_menu = about_menu
+
+    def _show_credentials_popup(self) -> None:
+        if self._credentials_window is None or not self._credentials_window.winfo_exists():
+            self._build_credentials_popup()
+
+        if self._credentials_window is None:
+            return
+
+        self._load_credentials_into_popup()
+        if self._credentials_window.state() != "withdrawn":
+            self._credentials_window.lift()
+            self._credentials_window.focus_force()
+            return
+
+        self._credentials_window.deiconify()
+        self._credentials_window.grab_set()
+        self._credentials_window.lift()
+        self._credentials_window.focus_force()
+
+    def _build_credentials_popup(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("SmartOdoo Credentials")
+        window.geometry("760x240")
+        window.resizable(False, False)
+        window.transient(self)
+        window.protocol("WM_DELETE_WINDOW", self._close_credentials_popup)
+        window.withdraw()
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+
+        frame = ttk.Frame(window, padding=12)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=0)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(2, weight=0)
+
+        ttk.Label(frame, text="Credential").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        ttk.Label(frame, text="Secret").grid(row=0, column=1, sticky="w", padx=(0, 8), pady=(0, 8))
+
+        rows: list[dict[str, object]] = []
+        for index, spec in enumerate(CREDENTIAL_SPECS, start=1):
+            password_var = tk.StringVar(value="")
+            revealed_var = tk.BooleanVar(value=False)
+
+            ttk.Label(frame, text=str(spec["label"])).grid(row=index, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
+
+            password_entry = ttk.Entry(frame, textvariable=password_var, width=30, show="*")
+            password_entry.grid(row=index, column=1, sticky="ew", padx=(0, 6), pady=(0, 6))
+
+            toggle_btn = ttk.Button(
+                frame,
+                text="Show",
+                width=8,
+                command=lambda rv=revealed_var, pe=password_entry: self._toggle_password_visibility(rv, pe),
+            )
+            toggle_btn.grid(row=index, column=2, sticky="w", pady=(0, 6))
+
+            rows.append(
+                {
+                    "spec": spec,
+                    "password_var": password_var,
+                    "revealed_var": revealed_var,
+                    "password_entry": password_entry,
+                    "toggle_btn": toggle_btn,
+                }
+            )
+
+        status_label = ttk.Label(frame, textvariable=self._credentials_status_var)
+        status_label.grid(row=len(CREDENTIAL_SPECS) + 1, column=0, columnspan=3, sticky="w", pady=(4, 10))
+
+        buttons_frame = ttk.Frame(frame)
+        buttons_frame.grid(row=len(CREDENTIAL_SPECS) + 2, column=0, columnspan=3, sticky="e")
+
+        ttk.Button(buttons_frame, text="Save", command=self._save_credentials_from_popup).grid(
+            row=0, column=0, padx=(0, 6)
+        )
+        ttk.Button(buttons_frame, text="Close", command=self._close_credentials_popup).grid(row=0, column=1)
+
+        self._credentials_window = window
+        self._credentials_rows = rows
+
+    def _close_credentials_popup(self) -> None:
+        if self._credentials_window is None:
+            return
+        try:
+            self._credentials_window.grab_release()
+        except tk.TclError:
+            pass
+        self._credentials_window.withdraw()
+
+    def _toggle_password_visibility(self, revealed_var: tk.BooleanVar, password_entry: ttk.Entry) -> None:
+        revealed = not revealed_var.get()
+        revealed_var.set(revealed)
+        password_entry.configure(show="" if revealed else "*")
+
+        for row in self._credentials_rows:
+            if row.get("password_entry") is password_entry:
+                toggle_btn = row.get("toggle_btn")
+                if isinstance(toggle_btn, ttk.Button):
+                    toggle_btn.configure(text="Hide" if revealed else "Show")
+                break
+
+    def _load_credentials_into_popup(self) -> None:
+        self._credentials_status_var.set("")
+        for row in self._credentials_rows:
+            spec = row.get("spec")
+            password_var = row.get("password_var")
+            revealed_var = row.get("revealed_var")
+            password_entry = row.get("password_entry")
+            toggle_btn = row.get("toggle_btn")
+
+            if not isinstance(spec, dict):
+                continue
+            if not isinstance(password_var, tk.StringVar):
+                continue
+
+            password_secret = str(spec["password_secret"])
+            password_var.set(self._read_secret_value(spec, password_secret))
+
+            if isinstance(revealed_var, tk.BooleanVar):
+                revealed_var.set(False)
+            if isinstance(password_entry, ttk.Entry):
+                password_entry.configure(show="*")
+            if isinstance(toggle_btn, ttk.Button):
+                toggle_btn.configure(text="Show")
+
+    def _save_credentials_from_popup(self) -> None:
+        try:
+            updated_count = 0
+            for row in self._credentials_rows:
+                spec = row.get("spec")
+                password_var = row.get("password_var")
+                if not isinstance(spec, dict):
+                    continue
+                if not isinstance(password_var, tk.StringVar):
+                    continue
+
+                password_value = password_var.get().strip()
+                if not password_value:
+                    continue
+
+                self._write_secret_value(spec, str(spec["password_secret"]), password_value)
+                updated_count += 1
+
+            if updated_count == 0:
+                self._credentials_status_var.set("Nothing to save. Enter at least one secret.")
+                return
+
+            self._credentials_status_var.set("Credentials saved.")
+            self._append_output(f"Credentials updated from GUI ({updated_count}).\n")
+        except Exception as exc:
+            self._credentials_status_var.set("")
+            messagebox.showerror("Credentials", f"Failed to save credentials:\n{exc}")
+
+    def _read_secret_value(self, spec: dict[str, str], secret_name: str) -> str:
+        if IS_WINDOWS:
+            file_name = spec.get("windows_password_file", "")
+            if not file_name:
+                return ""
+            return self._read_windows_secret(WINDOWS_SECRET_DIR / file_name)
+
+        return self._read_linux_secret(secret_name)
+
+    def _write_secret_value(self, spec: dict[str, str], secret_name: str, value: str) -> None:
+        if IS_WINDOWS:
+            file_name = spec.get("windows_password_file", "")
+            if not file_name:
+                raise RuntimeError(f"No storage file configured for secret '{secret_name}'.")
+            self._write_windows_secret(WINDOWS_SECRET_DIR / file_name, value, username="smartodoo")
+            return
+
+        self._write_linux_secret(secret_name, value)
+
+    def _read_linux_secret(self, secret_name: str) -> str:
+        encpass_path = resolve_encpass_path()
+        if not encpass_path.exists():
+            return ""
+
+        result = subprocess.run(
+            [str(encpass_path), "show", ENCPASS_BUCKET, secret_name],
+            text=True,
+            capture_output=True,
+            check=False,
+            **self._platform_subprocess_kwargs(),
+        )
+        if result.returncode != 0:
+            return ""
+        value = (result.stdout or "").strip()
+        if (
+            not value
+            or value == "**Locked**"
+            or value.startswith("Error:")
+            or "Failed to decrypt" in value
+            or "Unable to decrypt" in value
+        ):
+            return ""
+        return value
+
+    def _write_linux_secret(self, secret_name: str, value: str) -> None:
+        encpass_path = resolve_encpass_path()
+        if not encpass_path.exists():
+            raise RuntimeError("encpass.sh not found. Configure encpass first.")
+
+        platform_upsert_linux_secret(secret_name, value, encpass_path)
+
+    def _read_windows_secret(self, secret_file: Path) -> str:
+        value = platform_load_windows_credential_token(secret_file)
+        return value or ""
+
+    def _write_windows_secret(self, secret_file: Path, value: str, username: str) -> None:
+        platform_save_windows_credential_token(
+            secret_file=secret_file,
+            token=value,
+            username=username,
+            windows_secret_dir=WINDOWS_SECRET_DIR,
+        )
 
     def _show_version_popup(self) -> None:
         if self._about_window is None:
@@ -619,6 +885,7 @@ class SmartOdooUI(tk.Tk):
             self.psql_var,
             self.addons_var,
             self.branch_var,
+            self.vector_var,
             self.enterprise_var,
             self.upgrade_var,
             self.action_var,
@@ -650,6 +917,7 @@ class SmartOdooUI(tk.Tk):
         self._set_widget_visible(self.psql_label, self.psql_combo, show_create_fields)
         self._set_widget_visible(self.addons_label, self.addons_entry, show_create_fields)
         self._set_widget_visible(self.branch_label, self.branch_combo, show_create_fields)
+        self._set_single_widget_visible(self.vector_check, show_create_fields)
         self._set_single_widget_visible(self.enterprise_check, show_create_fields)
         self._set_single_widget_visible(self.upgrade_check, show_upgrade)
 
@@ -929,6 +1197,9 @@ class SmartOdooUI(tk.Tk):
             psql = self.psql_var.get().strip()
             if psql:
                 cmd.extend(["-p", psql])
+
+            if self.vector_var.get():
+                cmd.append("--pgvector")
 
             addons = self.addons_var.get().strip()
             if addons:

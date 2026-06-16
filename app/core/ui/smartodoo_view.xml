@@ -207,6 +207,18 @@
             </layout>
           </object>
         </child>
+        <child>
+          <object class="ttk.Checkbutton" id="vector_check">
+            <property name="text">pgvector</property>
+            <layout manager="grid">
+              <property name="row">3</property>
+              <property name="column">2</property>
+              <property name="sticky">w</property>
+              <property name="padx">4</property>
+              <property name="pady">4</property>
+            </layout>
+          </object>
+        </child>
 
         <child>
           <object class="ttk.Label" id="db_label">

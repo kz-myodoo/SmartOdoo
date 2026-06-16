@@ -32,6 +32,7 @@ WINDOWS_SECRET_DIR = ROOT / "secret"
 
 ODOO_VER = "19.0"
 PSQL_VER = "16"
+PSQL_IMAGE = "postgres"
 ODOO_REVISION = ""
 ODOO_GITHUB_NAME = "odoo"
 ODOO_ENTERPRISE_REPOSITORY = "enterprise"
@@ -192,7 +193,13 @@ def replace_line(content: str, key: str, value: str) -> str:
     return re.sub(pattern, lambda _match: replacement, content, flags=re.MULTILINE)
 
 
-def customize_env(project_name: str, project_fullpath: Path, odoo_ver: str, psql_ver: str) -> None:
+def customize_env(
+    project_name: str,
+    project_fullpath: Path,
+    odoo_ver: str,
+    psql_ver: str,
+    psql_image: str,
+) -> None:
     """Populate .env template with values for the current project."""
     content = read_text(ENV_FILE)
     enterprise_location = to_compose_path(ENTERPRISE_LOCATION / odoo_ver)
@@ -204,6 +211,7 @@ def customize_env(project_name: str, project_fullpath: Path, odoo_ver: str, psql
     content = replace_line(content, "ODOO_VER", odoo_ver)
     content = replace_line(content, "ODOO_REVISION", ODOO_REVISION)
     content = replace_line(content, "PSQL_VER", psql_ver)
+    content = replace_line(content, "PSQL_IMAGE", psql_image)
     content = replace_line(content, "ODOO_CONT_NAME", f"{project_name}-web")
     content = replace_line(content, "PSQL_CONT_NAME", f"{project_name}-db")
     content = replace_line(content, "SMTP_CONT_NAME", f"{project_name}-smtp")
@@ -222,6 +230,7 @@ def standarize_env() -> None:
     content = replace_line(content, "ODOO_VER", "15.0")
     content = replace_line(content, "ODOO_REVISION", "")
     content = replace_line(content, "PSQL_VER", "13")
+    content = replace_line(content, "PSQL_IMAGE", "postgres")
     content = replace_line(content, "ODOO_CONT_NAME", "ODOO_TEMP_CONT ")
     content = replace_line(content, "PSQL_CONT_NAME", "PSQL_TEMP_CONT ")
     content = replace_line(content, "SMTP_CONT_NAME", "SMTP_TEMP_CONT ")
@@ -241,6 +250,29 @@ def compose_exec_with_fallback(project_fullpath: Path, primary: list[str], fallb
     result = run_compose(project_fullpath, primary, check=False)
     if result.returncode != 0:
         run_compose(project_fullpath, fallback, check=True)
+
+
+def refresh_github_remote_token(repo_dir: Path, secret_name: str) -> None:
+    """Refresh GitHub HTTPS origin URL with the latest token from secret storage."""
+    remote_result = run(
+        ["git", "-C", str(repo_dir), "config", "--get", "remote.origin.url"],
+        capture_output=True,
+        check=False,
+    )
+    if remote_result.returncode != 0:
+        return
+
+    remote_url = (remote_result.stdout or "").strip()
+    match = re.match(r"^https://(?:[^@/]+@)?github\.com/([^?#]+)$", remote_url)
+    if not match:
+        return
+
+    token = get_secret(secret_name)
+    updated_url = f"https://{token}@github.com/{match.group(1)}"
+    if updated_url == remote_url:
+        return
+
+    run(["git", "-C", str(repo_dir), "remote", "set-url", "origin", updated_url], check=False)
 
 
 def addons_link_compose(addons_url: str) -> str:
@@ -304,6 +336,7 @@ def clone_enterprise(odoo_ver: str, install_enterprise_modules: bool) -> None:
         return
 
     if (target / ".git").exists():
+        refresh_github_remote_token(target, "github_enterprise_token")
         run(["git", "-C", str(target), "pull", "--ff-only"])
         return
 
@@ -431,6 +464,7 @@ def project_start(project_name: str, project_fullpath: Path, with_upgrade: bool)
         print("UPDATE GIT REPO")
         addons_dir = project_fullpath / "addons"
         if (addons_dir / ".git").exists():
+            refresh_github_remote_token(addons_dir, "github_addons_token")
             run(["git", "-C", str(addons_dir), "stash"], check=False)
             run(["git", "-C", str(addons_dir), "pull"], check=False)
             run(["git", "-C", str(addons_dir), "stash", "pop"], check=False)
@@ -577,7 +611,8 @@ def adjust_project_odoo_conf(project_fullpath: Path, install_enterprise_modules:
 def create_project(args: argparse.Namespace, project_fullpath: Path, addons_clone_url: Optional[str]) -> None:
     """Initialize and start a new Docker project workspace."""
     print("CREATE PROJECT")
-    customize_env(args.name, project_fullpath, args.odoo, args.psql)
+    psql_image = "pgvector/pgvector" if args.pgvector else PSQL_IMAGE
+    customize_env(args.name, project_fullpath, args.odoo, args.psql, psql_image)
     copy_required_files(project_fullpath)
     adjust_project_odoo_conf(project_fullpath, args.enterprise)
     clone_addons(project_fullpath, addons_clone_url, args.branch)
@@ -619,6 +654,18 @@ def check_psql_version(value: str) -> str:
     return value[:-2] if value.endswith(".0") else value
 
 
+def check_psql_vector_version(value: str) -> str:
+    """Normalize pgvector tag from a PostgreSQL version-like value."""
+    normalized = value.strip()
+    if normalized.endswith(".0"):
+        normalized = normalized[:-2]
+    if re.match(r"^\d+(?:\.\d+)?$", normalized):
+        return f"pg{normalized}"
+    if re.match(r"^pg\d+(?:\.\d+)?$", normalized):
+        return normalized
+    return normalized
+
+
 def display_help(error: Optional[str] = None) -> None:
     """Print usage information and exit with code 2."""
     if error:
@@ -634,7 +681,8 @@ def display_help(error: Optional[str] = None) -> None:
     print()
     print("  -n, --name                 (required) project name")
     print("  -o, --odoo                 Odoo version")
-    print("  -p, --psql                 PostgreSQL version")
+    print("  -p, --psql                 PostgreSQL version (or pgvector image version when --pgvector is used)")
+    print("      --pgvector             Use pgvector image for db service")
     print("  -a, --addons               Addons repository URL")
     print("  -b, --branch               Addons repository branch")
     print("  -e, --enterprise           Install enterprise modules")
@@ -661,6 +709,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-n", "--name")
     parser.add_argument("-o", "--odoo", default=ODOO_VER)
     parser.add_argument("-p", "--psql", default=PSQL_VER)
+    parser.add_argument("--pgvector", action="store_true")
     parser.add_argument("-a", "--addons")
     parser.add_argument("-b", "--branch")
     parser.add_argument("-e", "--enterprise", action="store_true")
@@ -695,7 +744,7 @@ def parse_args() -> argparse.Namespace:
         display_help("ERROR Need to specify project name.")
     check_odoo_version(args.odoo)
     args.odoo = ODOO_VER
-    args.psql = check_psql_version(args.psql)
+    args.psql = check_psql_vector_version(args.psql) if args.pgvector else check_psql_version(args.psql)
     return args
 
 

@@ -25,7 +25,7 @@ services:
       - ${ENTERPRISE_LOCATION}:/mnt/enterprise
     restart: on-failure
   db:
-    image: postgres:${PSQL_VER}
+    image: ${PSQL_IMAGE}:${PSQL_VER}
     container_name: ${PSQL_CONT_NAME}
     environment:
       - POSTGRES_DB=postgres

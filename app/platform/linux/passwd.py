@@ -76,18 +76,49 @@ def _encpass_add_secret(secret_name: str, encpass_path: Path) -> subprocess.Comp
     """Add or update secret in the encpass bucket."""
     prompted_value = _prompt_secret_value(secret_name)
     if prompted_value:
-        add_input = f"{prompted_value}\n{prompted_value}\n"
-        return subprocess.run(
-            [str(encpass_path), "add", "-f", ENCPASS_BUCKET, secret_name],
-            text=True,
-            capture_output=True,
-            check=False,
-            input=add_input,
-        )
+        return _encpass_add_secret_with_value(secret_name, prompted_value, encpass_path)
 
     return subprocess.CompletedProcess(
         args=[str(encpass_path), "add", "-f", ENCPASS_BUCKET, secret_name],
         returncode=1,
         stdout="",
         stderr="Secret input canceled.",
+    )
+
+
+def _encpass_add_secret_with_value(secret_name: str, secret_value: str, encpass_path: Path) -> subprocess.CompletedProcess:
+    """Add or update a secret by piping confirmed value into encpass add."""
+    add_input = f"{secret_value}\n{secret_value}\n"
+    return subprocess.run(
+        [str(encpass_path), "add", "-f", ENCPASS_BUCKET, secret_name],
+        text=True,
+        capture_output=True,
+        check=False,
+        input=add_input,
+    )
+
+
+def upsert_secret(secret_name: str, secret_value: str, encpass_path: Path) -> None:
+    """Persist a secret and verify it was stored correctly in the configured bucket."""
+    if not encpass_path.exists():
+        raise RuntimeError(f"Missing secret '{secret_name}'. Configure encpass.sh (Linux/macOS).")
+
+    add_result = _encpass_add_secret_with_value(secret_name, secret_value, encpass_path)
+    verify_result = subprocess.run(
+        [str(encpass_path), "show", ENCPASS_BUCKET, secret_name],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    verified_value = (verify_result.stdout or "").strip()
+    if verify_result.returncode == 0 and verified_value and verified_value != "**Locked**":
+        return
+
+    add_stderr = (add_result.stderr or "").strip() if add_result.stderr is not None else ""
+    add_stdout = (add_result.stdout or "").strip() if add_result.stdout is not None else ""
+    verify_stderr = (verify_result.stderr or "").strip() if verify_result.stderr is not None else ""
+    details = add_stderr or add_stdout or verify_stderr or "no details"
+    raise RuntimeError(
+        f"Failed to add secret '{secret_name}' to bucket '{ENCPASS_BUCKET}'. Details: {details}"
     )
