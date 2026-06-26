@@ -5,6 +5,7 @@ import ssl
 from pathlib import Path
 from threading import Lock
 from typing import Optional, TypedDict
+from urllib.parse import urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -29,6 +30,12 @@ class GithubReleaseInfo(TypedDict):
     published_at: str
     source: str
     assets: list[dict[str, str]]
+
+
+class GithubRepoRef(TypedDict):
+    owner: str
+    repository: str
+    scheme: str
 
 
 DEFAULT_GITHUB_REPOSITORY_URL = "git@github.com:kz-myodoo/SmartOdoo.git"
@@ -111,19 +118,80 @@ def load_platform_paths(*, root_dir: Path) -> PlatformPaths:
 
 def _parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
     """Extract owner/repo from SSH or HTTPS GitHub URL."""
+    parsed = parse_github_repo_url(repo_url)
+    return parsed["owner"], parsed["repository"]
+
+
+def parse_github_repo_url(repo_url: str) -> GithubRepoRef:
+    """Parse GitHub SSH/HTTPS URL and return normalized owner/repository/scheme."""
     cleaned = repo_url.strip()
     if not cleaned:
         raise ValueError("GitHub repository URL is empty.")
 
-    ssh_match = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$", cleaned)
+    ssh_match = re.match(r"^git@github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$", cleaned)
     if ssh_match:
-        return ssh_match.group(1), ssh_match.group(2)
+        owner = ssh_match.group(1).strip()
+        repository = ssh_match.group(2).strip()
+        if owner and repository:
+            return {"owner": owner, "repository": repository, "scheme": "ssh"}
 
-    https_match = re.match(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", cleaned)
-    if https_match:
-        return https_match.group(1), https_match.group(2)
+    ssh_uri_match = re.match(r"^ssh://git@github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", cleaned)
+    if ssh_uri_match:
+        owner = ssh_uri_match.group(1).strip()
+        repository = ssh_uri_match.group(2).strip()
+        if owner and repository:
+            return {"owner": owner, "repository": repository, "scheme": "ssh"}
+
+    split = urlsplit(cleaned)
+    scheme = split.scheme.lower()
+    hostname = (split.hostname or "").lower()
+    if scheme in {"http", "https"} and hostname == "github.com":
+        path = split.path
+        if "/tree/" in path:
+            path = path.split("/tree/", 1)[0]
+        segments = [segment for segment in path.strip("/").split("/") if segment]
+        if len(segments) >= 2:
+            owner = segments[0].strip()
+            repository = segments[1].strip()
+            if repository.endswith(".git"):
+                repository = repository[:-4]
+            if owner and repository:
+                return {"owner": owner, "repository": repository, "scheme": "https"}
 
     raise ValueError(f"Unsupported GitHub repository URL: {repo_url}")
+
+
+def build_github_repo_url(
+    owner: str,
+    repository: str,
+    *,
+    scheme: str = "https",
+    token: Optional[str] = None,
+) -> str:
+    """Build canonical GitHub repository URL for HTTPS or SSH."""
+    clean_owner = owner.strip().strip("/")
+    clean_repository = repository.strip().strip("/")
+    if clean_repository.endswith(".git"):
+        clean_repository = clean_repository[:-4]
+
+    if not clean_owner or not clean_repository:
+        raise ValueError("GitHub owner/repository cannot be empty.")
+
+    normalized_scheme = scheme.strip().lower()
+    if normalized_scheme == "ssh":
+        return f"git@github.com:{clean_owner}/{clean_repository}.git"
+    if normalized_scheme == "https":
+        if token is not None and token.strip():
+            return f"https://{token.strip()}@github.com/{clean_owner}/{clean_repository}.git"
+        return f"https://github.com/{clean_owner}/{clean_repository}.git"
+    raise ValueError(f"Unsupported GitHub URL scheme: {scheme}")
+
+
+def normalize_github_repo_url(repo_url: str, *, scheme: Optional[str] = None) -> str:
+    """Normalize GitHub repository URL to canonical SSH/HTTPS form."""
+    parsed = parse_github_repo_url(repo_url)
+    output_scheme = scheme.strip().lower() if scheme else parsed["scheme"]
+    return build_github_repo_url(parsed["owner"], parsed["repository"], scheme=output_scheme)
 
 
 def _github_get_json(url: str) -> dict:

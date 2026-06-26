@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from app.core.tools import (  # noqa: E402  # isort: skip
     get_latest_github_release_info,
     load_platform_paths,
+    normalize_github_repo_url,
     resolve_config_json_path,
     resolve_odoo_conf_path,
 )
@@ -968,7 +969,7 @@ class SmartOdooUI(tk.Tk):
             self.after_cancel(self.branch_fetch_after_id)
             self.branch_fetch_after_id = None
 
-        if "github.com" not in addons_url:
+        if not addons_url:
             self.branch_combo.configure(values=[])
             self.last_branch_source_url = ""
             return
@@ -1090,8 +1091,9 @@ class SmartOdooUI(tk.Tk):
     def _refresh_addons_branches_async(self) -> None:
         self.branch_fetch_after_id = None
         addons_url = self.addons_var.get().strip()
-        normalized = self._normalize_github_repo_url(addons_url)
-        if not normalized:
+        try:
+            normalized = normalize_github_repo_url(addons_url)
+        except ValueError:
             self.branch_combo.configure(values=[])
             self.last_branch_source_url = ""
             return
@@ -1099,33 +1101,6 @@ class SmartOdooUI(tk.Tk):
             return
 
         threading.Thread(target=self._fetch_addons_branches_worker, args=(normalized,), daemon=True).start()
-
-    def _normalize_github_repo_url(self, addons_url: str) -> str:
-        url = addons_url.strip()
-        if not url or "github.com" not in url:
-            return ""
-
-        if url.startswith("git@github.com:"):
-            repo_part = url[len("git@github.com:"):].strip("/")
-            segments = [segment for segment in repo_part.split("/") if segment]
-            if len(segments) < 2:
-                return ""
-            owner, repo = segments[0], segments[1]
-            repo = repo[:-4] if repo.endswith(".git") else repo
-            return f"git@github.com:{owner}/{repo}.git"
-
-        if "/tree/" in url:
-            url = url.split("/tree/", 1)[0]
-        url = url.split("?", 1)[0].split("#", 1)[0].rstrip("/")
-        if not url.startswith("http://") and not url.startswith("https://"):
-            return ""
-
-        parts = [segment for segment in url.split("/") if segment]
-        if len(parts) < 5:
-            return ""
-        owner, repo = parts[3], parts[4]
-        repo = repo[:-4] if repo.endswith(".git") else repo
-        return f"https://github.com/{owner}/{repo}.git"
 
     def _fetch_addons_branches_worker(self, repo_url: str) -> None:
         try:

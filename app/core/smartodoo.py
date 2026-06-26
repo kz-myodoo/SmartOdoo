@@ -16,8 +16,14 @@ ROOT = SCRIPT_DIR.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-from app.core.tools import load_platform_paths, resolve_odoo_conf_path  # noqa: E402  # isort: skip
-from app.core.tools import get_latest_github_release_info  # noqa: E402  # isort: skip
+from app.core.tools import (  # noqa: E402  # isort: skip
+    build_github_repo_url,
+    get_latest_github_release_info,
+    load_platform_paths,
+    normalize_github_repo_url,
+    parse_github_repo_url,
+    resolve_odoo_conf_path,
+)
 from app.core.version import get_smartodoo_version  # noqa: E402  # isort: skip
 
 
@@ -263,12 +269,21 @@ def refresh_github_remote_token(repo_dir: Path, secret_name: str) -> None:
         return
 
     remote_url = (remote_result.stdout or "").strip()
-    match = re.match(r"^https://(?:[^@/]+@)?github\.com/([^?#]+)$", remote_url)
-    if not match:
+    try:
+        parsed = parse_github_repo_url(remote_url)
+    except ValueError:
+        return
+
+    if parsed["scheme"] != "https":
         return
 
     token = get_secret(secret_name)
-    updated_url = f"https://{token}@github.com/{match.group(1)}"
+    updated_url = build_github_repo_url(
+        parsed["owner"],
+        parsed["repository"],
+        scheme="https",
+        token=token,
+    )
     if updated_url == remote_url:
         return
 
@@ -277,22 +292,32 @@ def refresh_github_remote_token(repo_dir: Path, secret_name: str) -> None:
 
 def addons_link_compose(addons_url: str) -> str:
     """Validate addons URL and build authenticated clone URL when needed."""
-    if "github.com" not in addons_url and not addons_url.startswith("git@github.com"):
+    try:
+        parsed = parse_github_repo_url(addons_url)
+    except ValueError:
         display_help("Currently only github URLs accepted")
-    if addons_url.startswith("https://"):
-        trimmed = addons_url[8:]
-        token = get_secret("github_addons_token")
-        return f"https://{token}@{trimmed}"
-    if addons_url.startswith("git@github.com"):
-        return addons_url
-    display_help("Currently only HTTPS/SSH URLs are accepted")
-    raise SystemExit(2)
+
+    if parsed["scheme"] == "ssh":
+        return normalize_github_repo_url(addons_url, scheme="ssh")
+
+    token = get_secret("github_addons_token")
+    return build_github_repo_url(
+        parsed["owner"],
+        parsed["repository"],
+        scheme="https",
+        token=token,
+    )
 
 
 def enterprise_link_compose() -> str:
     """Build enterprise repository clone URL with token authentication."""
     token = get_secret("github_enterprise_token")
-    return f"https://{token}@github.com/{ODOO_GITHUB_NAME}/{ODOO_ENTERPRISE_REPOSITORY}.git"
+    return build_github_repo_url(
+        ODOO_GITHUB_NAME,
+        ODOO_ENTERPRISE_REPOSITORY,
+        scheme="https",
+        token=token,
+    )
 
 
 def clone_addons(project_fullpath: Path, addons_clone_url: Optional[str], branch_name: Optional[str]) -> None:
