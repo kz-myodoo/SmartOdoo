@@ -5,23 +5,30 @@ FROM odoo:${ODOO_VER}${ODOO_REVISION}
 
 USER root
 
+ENV ODOO_VENV_DIR=/opt/odoo-venv
+ENV PATH=${ODOO_VENV_DIR}/bin:${PATH}
+
 SHELL ["/bin/bash", "-xo", "pipefail", "-c"]
 
-# Install git for cloning repositories in case of requirements.txt contains git+https links
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# Install git and venv tooling required for isolated Python environment.
+RUN apt-get update && apt-get install -y --no-install-recommends git python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# Create a dedicated virtual environment for Odoo runtime dependencies.
+# Keep access to base-image site-packages where Odoo preinstalls core Python libs.
+RUN python3 -m venv --system-site-packages ${ODOO_VENV_DIR}
 
 # Copy requirements.txt to the image or .docker_placeholder if addons direcotiry with requirements.txt is not present.
 COPY .docker_placeholde[r] [a]ddons/requirements.tx[t] /mnt/extra-addons/
 
 # install python packages
 RUN if test -f '/mnt/extra-addons/requirements.txt'; then \
-        pip3 install -r /mnt/extra-addons/requirements.txt || pip3 install --break-system-packages -r /mnt/extra-addons/requirements.txt; \
+    ${ODOO_VENV_DIR}/bin/pip install -r /mnt/extra-addons/requirements.txt; \
     fi;
 # install debugpy package for debugging
-RUN pip3 install --break-system-packages debugpy || pip3 install debugpy
+RUN ${ODOO_VENV_DIR}/bin/pip install debugpy
 
 # install often required paskages
-RUN pip3 install --break-system-packages html2text suds || pip3 install html2text suds
+RUN ${ODOO_VENV_DIR}/bin/pip install html2text suds
 
 USER odoo

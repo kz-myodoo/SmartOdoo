@@ -11,6 +11,7 @@ import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
+from typing import Optional
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
@@ -25,7 +26,7 @@ from app.core.tools import (  # noqa: E402  # isort: skip
     resolve_config_json_path,
     resolve_odoo_conf_path,
 )
-from app.core.updater import is_update_available, prepare_latest_installer  # noqa: E402  # isort: skip
+from app.core.updater import is_update_available, prepare_latest_installer, select_release_installer_asset  # noqa: E402  # isort: skip
 from app.core.version import get_smartodoo_version  # noqa: E402  # isort: skip
 
 
@@ -124,6 +125,7 @@ class SmartOdooUI(tk.Tk):
         self._credentials_window: tk.Toplevel | None = None
         self._credentials_rows: list[dict[str, object]] = []
         self._credentials_status_var = tk.StringVar(value="")
+        self._footer_latest_version: str | None = None
 
         self._build_variables()
         self._load_ui_settings()
@@ -146,6 +148,7 @@ class SmartOdooUI(tk.Tk):
             apply_callback=self._apply_psql_versions,
             error_callback=self._on_psql_versions_error,
         )
+        self._check_startup_version_async()
         self.after(120, self._drain_output)
 
     def _platform_subprocess_kwargs(self) -> dict[str, object]:
@@ -602,6 +605,43 @@ class SmartOdooUI(tk.Tk):
         self._about_window.lift()
         self._about_window.focus_force()
 
+    def _check_startup_version_async(self) -> None:
+        threading.Thread(target=self._check_startup_version_worker, daemon=True).start()
+
+    def _check_startup_version_worker(self) -> None:
+        try:
+            latest_info = get_latest_github_release_info(force_refresh=True)
+            if latest_info is None:
+                self.after(0, lambda: self._apply_startup_version_result(None))
+                return
+
+            # Ensure the latest release has an installer for the current platform.
+            select_release_installer_asset(latest_info)
+
+            latest_version = str(latest_info.get("tag_name", "")).strip()
+            if latest_version and is_update_available(f"v{SMARTODOO_VERSION}", latest_version):
+                self.after(0, lambda: self._apply_startup_version_result(latest_version))
+                return
+
+            self.after(0, lambda: self._apply_startup_version_result(None))
+        except RuntimeError:
+            self.after(0, lambda: self._apply_startup_version_result(None))
+
+    def _apply_startup_version_result(self, latest_version: str | None) -> None:
+        self._footer_latest_version = latest_version
+        self._refresh_footer_version_indicator()
+
+    def _refresh_footer_version_indicator(self) -> None:
+        if self._footer_latest_version:
+            self.version_var.set(f"v{SMARTODOO_VERSION} (New version {self._footer_latest_version} available)")
+            if hasattr(self, "version_label"):
+                self.version_label.configure(style="VersionAlert.TLabel")
+            return
+
+        self.version_var.set(f"v{SMARTODOO_VERSION}")
+        if hasattr(self, "version_label"):
+            self.version_label.configure(style="VersionDefault.TLabel")
+
     def _close_about_window(self) -> None:
         if self._about_window is None:
             return
@@ -753,6 +793,8 @@ class SmartOdooUI(tk.Tk):
         style.configure("Main.TFrame", background=colors["bg"])
         style.configure("TFrame", background=colors["bg"])
         style.configure("TLabel", background=colors["bg"], foreground=colors["fg"])
+        style.configure("VersionDefault.TLabel", background=colors["bg"], foreground=colors["fg"])
+        style.configure("VersionAlert.TLabel", background=colors["bg"], foreground="#f59e0b")
         style.configure("TCheckbutton", background=colors["bg"], foreground=colors["fg"])
         style.map("TCheckbutton", background=[("active", colors["bg"])])
         style.configure(
@@ -837,6 +879,8 @@ class SmartOdooUI(tk.Tk):
                 activebackground=colors["accent"],
                 activeforeground=colors["fg"],
             )
+
+        self._refresh_footer_version_indicator()
 
     def _refresh_combobox_popdown_colors(self, colors: dict[str, str]) -> None:
         for widget in (self.action_combo, self.project_name_entry, self.odoo_combo, self.psql_combo, self.branch_combo, self.rebuild_combo):
@@ -1464,22 +1508,42 @@ class SmartOdooUI(tk.Tk):
         self.output_queue.put("__PROCESS_DONE__")
 
     def _drain_output(self) -> None:
+        max_chunks_per_tick = 300
+        processed = 0
+        batched_chunks: list[str] = []
+        yview = self.output_text.yview()
+        follow_tail = bool(yview) and yview[1] >= 0.999
+
         try:
             while True:
                 chunk = self.output_queue.get_nowait()
                 if chunk == "__PROCESS_DONE__":
+                    if batched_chunks:
+                        self._append_output("".join(batched_chunks), follow_tail=follow_tail)
+                        batched_chunks.clear()
                     self._set_running_state(False)
                     self.process = None
                 else:
-                    self._append_output(chunk)
+                    batched_chunks.append(chunk)
+                    processed += 1
+                    if processed >= max_chunks_per_tick:
+                        break
         except queue.Empty:
             pass
 
+        if batched_chunks:
+            self._append_output("".join(batched_chunks), follow_tail=follow_tail)
+
         self.after(120, self._drain_output)
 
-    def _append_output(self, text: str) -> None:
+    def _append_output(self, text: str, follow_tail: Optional[bool] = None) -> None:
+        # Follow tail only when user is already at the bottom of the log view.
+        if follow_tail is None:
+            yview = self.output_text.yview()
+            follow_tail = bool(yview) and yview[1] >= 0.999
         self.output_text.insert("end", text)
-        self.output_text.see("end")
+        if follow_tail:
+            self.output_text.see("end")
         self._detect_secret_prompt(text)
 
     def _detect_secret_prompt(self, text: str) -> None:

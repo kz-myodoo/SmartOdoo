@@ -38,6 +38,8 @@ ODOO_GITHUB_NAME = "odoo"
 ODOO_ENTERPRISE_REPOSITORY = "enterprise"
 UPGRADE_UTIL_REPOSITORY = "git@github.com:odoo/upgrade-util.git"
 SCAFFOLD_ADDONS_PATH = "/mnt/extra-addons"
+ODOO_VENV_PYTHON = "/opt/odoo-venv/bin/python"
+ODOO_VENV_PIP = "/opt/odoo-venv/bin/pip"
 SMARTODOO_VERSION = get_smartodoo_version(root_dir=ROOT)
 
 IS_WINDOWS = sys.platform.startswith("win")
@@ -124,9 +126,38 @@ def detect_compose_base() -> list[str]:
 COMPOSE_BASE = detect_compose_base()
 
 
+def build_compose_env() -> dict[str, str]:
+    """Build isolated environment for docker compose calls."""
+    allowed_keys = (
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "DOCKER_HOST",
+        "DOCKER_CONTEXT",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "DOCKER_CONFIG",
+    )
+    compose_env: dict[str, str] = {}
+    for key in allowed_keys:
+        value = os.getenv(key)
+        if value is not None:
+            compose_env[key] = value
+    return compose_env
+
+
 def run_compose(project_path: Path, compose_args: list[str], check: bool = True) -> subprocess.CompletedProcess:
     """Run a docker compose command inside the selected project directory."""
-    return run(COMPOSE_BASE + compose_args, cwd=project_path, check=check)
+    return run(COMPOSE_BASE + compose_args, cwd=project_path, check=check, env=build_compose_env())
 
 
 def fetch_odoo_docker_tags(page_size: int = 100) -> list[dict[str, str | int | None]]:
@@ -194,14 +225,15 @@ def replace_line(content: str, key: str, value: str) -> str:
 
 
 def customize_env(
+    env_path: Path,
     project_name: str,
     project_fullpath: Path,
     odoo_ver: str,
     psql_ver: str,
     psql_image: str,
 ) -> None:
-    """Populate .env template with values for the current project."""
-    content = read_text(ENV_FILE)
+    """Populate project-local .env file with values for the current project."""
+    content = read_text(env_path)
     enterprise_location = to_compose_path(ENTERPRISE_LOCATION / odoo_ver)
     upgrade_util_location = to_compose_path(UPGRADE_UTIL_LOCATION)
     project_location = to_compose_path(project_fullpath)
@@ -216,26 +248,9 @@ def customize_env(
     content = replace_line(content, "PSQL_CONT_NAME", f"{project_name}-db")
     content = replace_line(content, "SMTP_CONT_NAME", f"{project_name}-smtp")
     content = replace_line(content, "PROJECT_LOCATION", project_location)
-    write_text(ENV_FILE, content)
+    write_text(env_path, content)
     print()
     print(content)
-
-
-def standarize_env() -> None:
-    """Restore .env template values to defaults."""
-    content = read_text(ENV_FILE)
-    content = replace_line(content, "PROJECT_NAME", "TEST_PROJECT")
-    content = replace_line(content, "ENTERPRISE_LOCATION", "TEST_ENTERPRISE_LOCATION")
-    content = replace_line(content, "UPGRADE_UTIL_LOCATION", "TEST_UTIL_LOCATION")
-    content = replace_line(content, "ODOO_VER", "15.0")
-    content = replace_line(content, "ODOO_REVISION", "")
-    content = replace_line(content, "PSQL_VER", "13")
-    content = replace_line(content, "PSQL_IMAGE", "postgres")
-    content = replace_line(content, "ODOO_CONT_NAME", "ODOO_TEMP_CONT ")
-    content = replace_line(content, "PSQL_CONT_NAME", "PSQL_TEMP_CONT ")
-    content = replace_line(content, "SMTP_CONT_NAME", "SMTP_TEMP_CONT ")
-    content = replace_line(content, "PROJECT_LOCATION", "TEST_LOCATION ")
-    write_text(ENV_FILE, content)
 
 
 def get_secret(secret_name: str) -> str:
@@ -432,7 +447,7 @@ def run_with_upgrade(project_fullpath: Path) -> None:
             "--rm",
             "--name=web_upgrade",
             "web",
-            "/usr/bin/python3",
+            ODOO_VENV_PYTHON,
             "-m",
             "debugpy",
             "--listen",
@@ -512,6 +527,14 @@ def pip_install(project_fullpath: Path, pip_module: Optional[str]) -> None:
     """Install a Python package inside the running web container."""
     if not pip_module:
         display_help("You need to specify module name that you want to install. Use --pip_install")
+
+    # Backward compatibility for projects created before venv-based web images.
+    venv_check = run_compose(project_fullpath, ["exec", "web", "test", "-x", ODOO_VENV_PIP], check=False)
+    if venv_check.returncode == 0:
+        run_compose(project_fullpath, ["exec", "web", ODOO_VENV_PIP, "install", pip_module])
+        return
+
+    print("Pip packages can now be installed in a venv. To enable this rebuild your project or manually update your Dockerfile and docker-compose.yml to use the venv-based web image. For now, pip will be installed in the system Python.")
     compose_exec_with_fallback(
         project_fullpath,
         ["exec", "web", "python3", "-m", "pip", "install", pip_module],
@@ -612,19 +635,19 @@ def create_project(args: argparse.Namespace, project_fullpath: Path, addons_clon
     """Initialize and start a new Docker project workspace."""
     print("CREATE PROJECT")
     psql_image = "pgvector/pgvector" if args.pgvector else PSQL_IMAGE
-    customize_env(args.name, project_fullpath, args.odoo, args.psql, psql_image)
     copy_required_files(project_fullpath)
+    project_env = project_fullpath / ".env"
+    shutil.copy2(ENV_FILE, project_env)
+    customize_env(project_env, args.name, project_fullpath, args.odoo, args.psql, psql_image)
     adjust_project_odoo_conf(project_fullpath, args.enterprise)
     clone_addons(project_fullpath, addons_clone_url, args.branch)
     clone_enterprise(args.odoo, args.enterprise)
     if args.upgrade:
         get_upgrade_util()
-    shutil.copy2(ENV_FILE, project_fullpath / ".env")
     run_compose(project_fullpath, ["pull", "web"], check=False)
     run_compose(project_fullpath, ["pull", "db"], check=False)
     run_compose(project_fullpath, ["pull", "smtp4dev"], check=False)
     run_compose(project_fullpath, ["-p", args.name, "up", "--detach", "--build"], check=False)
-    standarize_env()
     if not IS_WINDOWS:
         os.chmod(project_fullpath / "config", 0o777)
         conf_path = project_fullpath / "config" / "odoo.conf"

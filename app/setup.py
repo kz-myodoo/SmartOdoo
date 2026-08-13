@@ -9,7 +9,7 @@ README = ROOT / "readme.md"
 
 setup(
     name="smartodoo",
-    version="2.5",
+    version="2.6",
     description="SmartOdoo project tools",
     packages=find_packages(),
     include_package_data=True,
